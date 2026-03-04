@@ -21,7 +21,7 @@ from pathlib import Path
 
 # Auto-install dependencies
 def auto_install():
-    packages = ["rich", "jinja2", "httpx"]
+    packages = ["rich", "jinja2"]
     for pkg in packages:
         try:
             __import__(pkg.replace("-", "_"))
@@ -115,6 +115,23 @@ class ReconFusion:
     def check_tool(self, tool: str) -> bool:
         result = subprocess.run(["which", tool], capture_output=True, text=True)
         return result.returncode == 0
+
+    def get_tool_path(self, tool: str) -> str:
+        """Find the correct path for a tool, checking common locations."""
+        locations = [
+            f"/home/kali/go/bin/{tool}",
+            f"/root/go/bin/{tool}",
+            f"/usr/local/bin/{tool}",
+            f"/usr/bin/{tool}",
+        ]
+        for loc in locations:
+            if Path(loc).exists():
+                return loc
+        # fallback to which
+        result = subprocess.run(["which", tool], capture_output=True, text=True)
+        if result.returncode == 0:
+            return result.stdout.strip()
+        return tool  # hope it's in PATH
 
     def auto_install_tools(self):
         console.print("\n[bold cyan]⚙️  Checking & Installing Required Tools...[/bold cyan]")
@@ -232,7 +249,8 @@ class ReconFusion:
 
     async def _run_assetfinder(self):
         with console.status("[yellow]  Running assetfinder...[/yellow]"):
-            out, err, code = self.run_command(["assetfinder", "--subs-only", self.target])
+            af_path = self.get_tool_path("assetfinder")
+            out, err, code = self.run_command([af_path, "--subs-only", self.target])
             with open(self.output_dir / "raw" / "assetfinder.txt", "w") as f:
                 f.write(out)
             count = len([l for l in out.splitlines() if l.strip()])
@@ -240,7 +258,8 @@ class ReconFusion:
 
     async def _run_subfinder(self):
         with console.status("[yellow]  Running subfinder...[/yellow]"):
-            out, err, code = self.run_command(["subfinder", "-d", self.target, "-silent"])
+            sf_path = self.get_tool_path("subfinder")
+            out, err, code = self.run_command([sf_path, "-d", self.target, "-silent"])
             with open(self.output_dir / "raw" / "subfinder.txt", "w") as f:
                 f.write(out)
             count = len([l for l in out.splitlines() if l.strip()])
@@ -270,11 +289,13 @@ class ReconFusion:
             console.print("[yellow]  ⚠️ No subdomains to probe[/yellow]")
             return
 
+        httpx_path = self.get_tool_path("httpx")
         out, err, code = self.run_command([
-            "httpx", "-l", str(subs_file),
-            "-status-code", "-title", "-server", "-content-type",
-            "-json", "-silent", "-timeout", "10"
-        ], timeout=300)
+            httpx_path, "-l", str(subs_file),
+            "-sc", "-title", "-server", "-ct",
+            "-json", "-silent", "-timeout", "10",
+            "-threads", "50", "-retries", "2"
+        ], timeout=600)
 
         txt_lines = []
         json_records = []
@@ -286,9 +307,9 @@ class ReconFusion:
             try:
                 record = json.loads(line)
                 url = record.get("url", "")
-                status = record.get("status-code", "")
-                server = record.get("webserver", "")
-                ct = record.get("content-type", "")
+                status = record.get("status-code", record.get("status_code", ""))
+                server = record.get("webserver", record.get("server", ""))
+                ct = record.get("content-type", record.get("content_type", ""))
                 title = record.get("title", "")
                 txt_lines.append(f"{url} | {status} | {server} | {ct} | {title}")
                 json_records.append({
@@ -297,7 +318,27 @@ class ReconFusion:
                 })
                 self.live_hosts.append({"url": url, "status": status, "title": title, "server": server})
             except json.JSONDecodeError:
-                txt_lines.append(line)
+                # httpx sometimes outputs non-json lines - try to parse plain URL
+                if line.startswith("http"):
+                    txt_lines.append(line)
+
+        # If json parsing got nothing, try plain output mode
+        if not json_records and not out.strip():
+            console.print("  [yellow]  Retrying httpx in plain mode...[/yellow]")
+            out2, err2, code2 = self.run_command([
+                httpx_path, "-l", str(subs_file),
+                "-sc", "-title", "-silent", "-timeout", "10"
+            ], timeout=600)
+            for line in out2.splitlines():
+                line = line.strip()
+                if line and "http" in line:
+                    txt_lines.append(line)
+                    # parse: https://example.com [200]
+                    parts = line.split()
+                    url = parts[0] if parts else line
+                    status = parts[1].strip("[]") if len(parts) > 1 else ""
+                    json_records.append({"url": url, "status_code": status, "server": "", "content_type": "", "title": ""})
+                    self.live_hosts.append({"url": url, "status": status, "title": "", "server": ""})
 
         with open(self.output_dir / "processed" / "live_hosts.txt", "w") as f:
             f.write("\n".join(txt_lines))
@@ -322,8 +363,9 @@ class ReconFusion:
 
         # Try naabu first, fallback to nmap
         if self.check_tool("naabu"):
+            naabu_path = self.get_tool_path("naabu")
             out, err, code = self.run_command([
-                "naabu", "-l", str(subs_file), "-json", "-silent", "-top-ports", "100"
+                naabu_path, "-l", str(subs_file), "-json", "-silent", "-top-ports", "100"
             ], timeout=300)
             tool_used = "naabu"
         else:
@@ -392,10 +434,18 @@ class ReconFusion:
         with console.status("[yellow]  Running katana (URL crawling)...[/yellow]"):
             url_file = self.output_dir / "scans" / "katana_input.txt"
             with open(url_file, "w") as f:
-                f.write("\n".join(urls[:50]))  # Limit for performance
+                f.write("\n".join(urls[:50]))
 
+            if not urls:
+                console.print("  [yellow]  No URLs to crawl[/yellow]")
+                with open(self.output_dir / "scans" / "katana_urls.txt", "w") as f:
+                    f.write("")
+                return
+
+            katana_path = self.get_tool_path("katana")
             out, err, code = self.run_command([
-                "katana", "-list", str(url_file), "-silent", "-depth", "2"
+                katana_path, "-list", str(url_file), "-silent", "-depth", "2",
+                "-timeout", "10", "-retry", "1"
             ], timeout=300)
 
             with open(self.output_dir / "scans" / "katana_urls.txt", "w") as f:
@@ -411,8 +461,9 @@ class ReconFusion:
                     f.write("")
                 return
 
+            dalfox_path = self.get_tool_path("dalfox")
             out, err, code = self.run_command([
-                "dalfox", "file", str(katana_file), "--silence", "--format", "json"
+                dalfox_path, "file", str(katana_file), "--silence", "--format", "json"
             ], timeout=300)
 
             with open(self.output_dir / "scans" / "dalfox_results.txt", "w") as f:
@@ -439,9 +490,11 @@ class ReconFusion:
 
     def _run_nuclei(self, live_file: Path):
         with console.status("[yellow]  Running nuclei (template scanning)...[/yellow]"):
+            nuclei_path = self.get_tool_path("nuclei")
             out, err, code = self.run_command([
-                "nuclei", "-l", str(live_file), "-json", "-silent",
-                "-severity", "critical,high,medium,low"
+                nuclei_path, "-l", str(live_file), "-json-export", str(self.output_dir / "scans" / "nuclei_results.json"),
+                "-silent", "-severity", "critical,high,medium,low",
+                "-timeout", "10", "-retries", "1"
             ], timeout=600)
 
             with open(self.output_dir / "scans" / "nuclei_results.txt", "w") as f:
@@ -848,3 +901,4 @@ Examples:
 
 if __name__ == "__main__":
     main()
+
