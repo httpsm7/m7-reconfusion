@@ -1,0 +1,694 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ReconFusion M7 – MilkyWay Intelligence</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&family=Share+Tech+Mono&family=Rajdhani:wght@300;400;600;700&display=swap');
+
+  :root {
+    --bat-yellow: #FFD700;
+    --bat-yellow2: #FFA500;
+    --bat-dark: #050508;
+    --bat-gray: #0d0d12;
+    --bat-light: #15151e;
+    --bat-border: #1a1a2e;
+    --critical: #ff2244;
+    --high: #ff6600;
+    --medium: #ffcc00;
+    --low: #00aaff;
+    --glow: rgba(255, 215, 0, 0.15);
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    background: var(--bat-dark);
+    color: #c8c8d8;
+    font-family: 'Rajdhani', sans-serif;
+    overflow-x: hidden;
+    min-height: 100vh;
+  }
+
+  /* ── Animated grid background ── */
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background-image:
+      linear-gradient(rgba(255,215,0,0.03) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(255,215,0,0.03) 1px, transparent 1px);
+    background-size: 40px 40px;
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  /* ── Bat signal sweep ── */
+  .bat-signal {
+    position: fixed;
+    top: -300px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 600px;
+    height: 600px;
+    background: conic-gradient(from 0deg, transparent 0deg, rgba(255,215,0,0.04) 20deg, transparent 40deg);
+    border-radius: 50%;
+    animation: sweep 8s linear infinite;
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  @keyframes sweep {
+    from { transform: translateX(-50%) rotate(0deg); }
+    to { transform: translateX(-50%) rotate(360deg); }
+  }
+
+  /* ── Header ── */
+  header {
+    position: relative;
+    z-index: 10;
+    padding: 60px 20px 40px;
+    text-align: center;
+    border-bottom: 1px solid rgba(255,215,0,0.2);
+  }
+
+  .bat-logo-svg {
+    display: inline-block;
+    margin-bottom: 30px;
+    filter: drop-shadow(0 0 30px rgba(255,215,0,0.6));
+    animation: pulse-glow 3s ease-in-out infinite;
+  }
+
+  @keyframes pulse-glow {
+    0%, 100% { filter: drop-shadow(0 0 20px rgba(255,215,0,0.4)); transform: scale(1); }
+    50% { filter: drop-shadow(0 0 50px rgba(255,215,0,0.9)); transform: scale(1.02); }
+  }
+
+  .tool-title {
+    font-family: 'Orbitron', monospace;
+    font-size: clamp(2rem, 5vw, 4rem);
+    font-weight: 900;
+    color: var(--bat-yellow);
+    letter-spacing: 6px;
+    text-shadow: 0 0 40px rgba(255,215,0,0.5);
+    animation: flicker 6s ease-in-out infinite;
+  }
+
+  @keyframes flicker {
+    0%, 92%, 96%, 100% { opacity: 1; }
+    94% { opacity: 0.85; }
+  }
+
+  .subtitle {
+    font-family: 'Share Tech Mono', monospace;
+    color: rgba(255,215,0,0.5);
+    letter-spacing: 4px;
+    font-size: 0.8rem;
+    margin-top: 10px;
+    text-transform: uppercase;
+  }
+
+  .producer-tag {
+    display: inline-block;
+    margin-top: 16px;
+    padding: 6px 20px;
+    border: 1px solid rgba(255,215,0,0.3);
+    color: rgba(255,215,0,0.7);
+    font-family: 'Share Tech Mono', monospace;
+    font-size: 0.75rem;
+    letter-spacing: 3px;
+    background: rgba(255,215,0,0.05);
+  }
+
+  /* ── Main content ── */
+  main {
+    position: relative;
+    z-index: 10;
+    max-width: 1100px;
+    margin: 0 auto;
+    padding: 40px 20px 80px;
+  }
+
+  /* ── ASCII Banner ── */
+  .ascii-banner {
+    background: rgba(255,215,0,0.03);
+    border: 1px solid rgba(255,215,0,0.15);
+    border-radius: 4px;
+    padding: 20px;
+    margin-bottom: 40px;
+    overflow-x: auto;
+  }
+
+  .ascii-banner pre {
+    font-family: 'Share Tech Mono', monospace;
+    font-size: 0.6rem;
+    color: var(--bat-yellow);
+    opacity: 0.7;
+    line-height: 1.2;
+    text-align: center;
+    animation: scanline 4s linear infinite;
+  }
+
+  @keyframes scanline {
+    0% { opacity: 0.5; }
+    50% { opacity: 0.9; }
+    100% { opacity: 0.5; }
+  }
+
+  /* ── Phase cards ── */
+  .phases-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+    gap: 20px;
+    margin-bottom: 40px;
+  }
+
+  .phase-card {
+    background: var(--bat-gray);
+    border: 1px solid var(--bat-border);
+    border-top: 2px solid var(--bat-yellow);
+    padding: 24px;
+    position: relative;
+    overflow: hidden;
+    transition: all 0.3s ease;
+  }
+
+  .phase-card::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(135deg, var(--glow) 0%, transparent 60%);
+    opacity: 0;
+    transition: opacity 0.3s;
+  }
+
+  .phase-card:hover::before { opacity: 1; }
+  .phase-card:hover { border-color: var(--bat-yellow); transform: translateY(-3px); box-shadow: 0 10px 40px rgba(255,215,0,0.1); }
+
+  .phase-num {
+    font-family: 'Orbitron', monospace;
+    font-size: 0.65rem;
+    color: rgba(255,215,0,0.4);
+    letter-spacing: 3px;
+    text-transform: uppercase;
+    margin-bottom: 8px;
+  }
+
+  .phase-title {
+    font-family: 'Orbitron', monospace;
+    font-size: 1rem;
+    color: var(--bat-yellow);
+    margin-bottom: 12px;
+  }
+
+  .phase-tools {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-bottom: 12px;
+  }
+
+  .tool-badge {
+    font-family: 'Share Tech Mono', monospace;
+    font-size: 0.72rem;
+    padding: 3px 10px;
+    background: rgba(255,215,0,0.08);
+    border: 1px solid rgba(255,215,0,0.25);
+    color: var(--bat-yellow);
+    border-radius: 2px;
+  }
+
+  .phase-desc {
+    font-size: 0.9rem;
+    color: #8888aa;
+    line-height: 1.5;
+  }
+
+  /* ── CLI Demo ── */
+  .terminal {
+    background: #050508;
+    border: 1px solid rgba(255,215,0,0.2);
+    border-radius: 6px;
+    overflow: hidden;
+    margin-bottom: 40px;
+    box-shadow: 0 0 60px rgba(255,215,0,0.05);
+  }
+
+  .terminal-bar {
+    background: #0d0d12;
+    padding: 12px 16px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    border-bottom: 1px solid rgba(255,215,0,0.1);
+  }
+
+  .dot { width: 12px; height: 12px; border-radius: 50%; }
+  .dot-r { background: #ff5f57; }
+  .dot-y { background: #febc2e; }
+  .dot-g { background: #28c840; }
+
+  .terminal-title {
+    font-family: 'Share Tech Mono', monospace;
+    font-size: 0.75rem;
+    color: rgba(255,215,0,0.4);
+    margin-left: 10px;
+  }
+
+  .terminal-body {
+    padding: 24px;
+    font-family: 'Share Tech Mono', monospace;
+    font-size: 0.82rem;
+    line-height: 2;
+  }
+
+  .t-prompt { color: rgba(255,215,0,0.6); }
+  .t-cmd { color: var(--bat-yellow); }
+  .t-yellow { color: var(--bat-yellow); }
+  .t-cyan { color: #00e5ff; }
+  .t-green { color: #00ff88; }
+  .t-red { color: var(--critical); }
+  .t-orange { color: var(--high); }
+  .t-dim { color: #555577; }
+  .t-white { color: #ddddf0; }
+
+  .cursor {
+    display: inline-block;
+    width: 8px;
+    height: 14px;
+    background: var(--bat-yellow);
+    vertical-align: middle;
+    animation: blink 1s step-end infinite;
+  }
+
+  @keyframes blink {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0; }
+  }
+
+  /* ── Output structure ── */
+  .output-tree {
+    background: var(--bat-gray);
+    border: 1px solid var(--bat-border);
+    padding: 24px;
+    font-family: 'Share Tech Mono', monospace;
+    font-size: 0.82rem;
+    line-height: 2;
+    margin-bottom: 40px;
+    color: #8888aa;
+  }
+
+  .output-tree .folder { color: var(--bat-yellow); }
+  .output-tree .file { color: #6699cc; }
+  .output-tree .report { color: #00ff88; font-weight: bold; }
+  .output-tree .comment { color: #444466; }
+
+  /* ── Stats preview ── */
+  .stats-row {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 16px;
+    margin-bottom: 40px;
+  }
+
+  .stat-box {
+    background: var(--bat-gray);
+    border: 1px solid var(--bat-border);
+    border-bottom: 3px solid var(--bat-yellow);
+    padding: 20px;
+    text-align: center;
+  }
+
+  .stat-n {
+    font-family: 'Orbitron', monospace;
+    font-size: 2.2rem;
+    font-weight: 900;
+    color: var(--bat-yellow);
+    text-shadow: 0 0 20px rgba(255,215,0,0.4);
+  }
+
+  .stat-l {
+    font-size: 0.75rem;
+    color: #666688;
+    text-transform: uppercase;
+    letter-spacing: 2px;
+    margin-top: 4px;
+  }
+
+  .stat-box.critical .stat-n { color: var(--critical); text-shadow: 0 0 20px rgba(255,34,68,0.4); }
+  .stat-box.critical { border-bottom-color: var(--critical); }
+  .stat-box.high .stat-n { color: var(--high); text-shadow: 0 0 20px rgba(255,102,0,0.4); }
+  .stat-box.high { border-bottom-color: var(--high); }
+
+  /* ── Feature highlights ── */
+  .features-section {
+    margin-bottom: 40px;
+  }
+
+  .section-heading {
+    font-family: 'Orbitron', monospace;
+    font-size: 0.8rem;
+    color: rgba(255,215,0,0.5);
+    letter-spacing: 4px;
+    text-transform: uppercase;
+    margin-bottom: 20px;
+    padding-bottom: 10px;
+    border-bottom: 1px solid rgba(255,215,0,0.15);
+  }
+
+  .feature-list {
+    list-style: none;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: 12px;
+  }
+
+  .feature-list li {
+    padding: 12px 16px;
+    background: rgba(255,215,0,0.03);
+    border-left: 2px solid rgba(255,215,0,0.3);
+    font-size: 0.9rem;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .feature-list li .icon { font-size: 1.1rem; }
+
+  /* ── Disclaimer ── */
+  .disclaimer {
+    background: rgba(255,34,68,0.05);
+    border: 1px solid rgba(255,34,68,0.3);
+    padding: 20px 24px;
+    margin-bottom: 40px;
+    display: flex;
+    gap: 16px;
+    align-items: flex-start;
+  }
+
+  .disclaimer .icon { font-size: 1.5rem; flex-shrink: 0; margin-top: 2px; }
+  .disclaimer p { font-size: 0.85rem; color: #cc8888; line-height: 1.7; }
+  .disclaimer strong { color: var(--critical); }
+
+  /* ── Install command ── */
+  .install-box {
+    background: var(--bat-gray);
+    border: 1px solid rgba(255,215,0,0.2);
+    padding: 20px 24px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 20px;
+    margin-bottom: 40px;
+    flex-wrap: wrap;
+  }
+
+  .install-cmd {
+    font-family: 'Share Tech Mono', monospace;
+    color: var(--bat-yellow);
+    font-size: 0.9rem;
+  }
+
+  .copy-btn {
+    background: rgba(255,215,0,0.1);
+    border: 1px solid rgba(255,215,0,0.3);
+    color: var(--bat-yellow);
+    padding: 8px 20px;
+    font-family: 'Orbitron', monospace;
+    font-size: 0.65rem;
+    letter-spacing: 2px;
+    cursor: pointer;
+    transition: all 0.2s;
+    white-space: nowrap;
+  }
+
+  .copy-btn:hover { background: rgba(255,215,0,0.2); }
+
+  /* ── Footer ── */
+  footer {
+    border-top: 1px solid rgba(255,215,0,0.15);
+    padding: 30px 20px;
+    text-align: center;
+    position: relative;
+    z-index: 10;
+  }
+
+  footer .bat { font-size: 2.5rem; animation: pulse-glow 3s ease-in-out infinite; display: block; margin-bottom: 12px; }
+  footer p { font-family: 'Share Tech Mono', monospace; font-size: 0.75rem; color: rgba(255,215,0,0.4); letter-spacing: 2px; }
+
+  /* Animated typing for CLI */
+  .type-line {
+    overflow: hidden;
+    white-space: nowrap;
+    border-right: 2px solid var(--bat-yellow);
+    animation: typing 3s steps(60) 0.5s both, blink-caret 0.7s step-end infinite;
+    width: 0;
+  }
+
+  @keyframes typing { to { width: 100%; } }
+  @keyframes blink-caret { 0%, 100% { border-color: var(--bat-yellow); } 50% { border-color: transparent; } }
+</style>
+</head>
+<body>
+<div class="bat-signal"></div>
+
+<header>
+  <div class="bat-logo-svg">
+    <svg width="120" height="80" viewBox="0 0 200 130" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <!-- Batman logo shape -->
+      <ellipse cx="100" cy="90" rx="80" ry="35" fill="#FFD700"/>
+      <ellipse cx="100" cy="85" rx="50" ry="20" fill="#050508"/>
+      <!-- Wings -->
+      <path d="M20 90 Q5 40 30 30 Q50 20 65 60 Q80 40 100 65 Q120 40 135 60 Q150 20 170 30 Q195 40 180 90 Z" fill="#FFD700"/>
+      <!-- Wing cutouts -->
+      <path d="M30 85 Q15 50 35 40 Q50 30 60 55 Z" fill="#050508"/>
+      <path d="M170 85 Q185 50 165 40 Q150 30 140 55 Z" fill="#050508"/>
+      <!-- Ears -->
+      <path d="M78 65 L65 30 L90 55 Z" fill="#FFD700"/>
+      <path d="M122 65 L135 30 L110 55 Z" fill="#FFD700"/>
+      <!-- Body highlight -->
+      <ellipse cx="100" cy="88" rx="30" ry="12" fill="#050508" opacity="0.7"/>
+    </svg>
+  </div>
+
+  <div class="tool-title">RECONFUSION</div>
+  <div class="subtitle">Modular Recon &amp; Vulnerability Automation Framework</div>
+  <div class="producer-tag">⚡ M7 BATMAN EDITION &nbsp;|&nbsp; PRODUCED BY MILKYWAY INTELLIGENCE ⚡</div>
+</header>
+
+<main>
+
+  <!-- ASCII Banner -->
+  <div class="ascii-banner">
+    <pre>
+██████╗ ███████╗ ██████╗ ██████╗ ███╗   ██╗███████╗██╗   ██╗███████╗██╗ ██████╗ ███╗   ██╗
+██╔══██╗██╔════╝██╔════╝██╔═══██╗████╗  ██║██╔════╝██║   ██║██╔════╝██║██╔═══██╗████╗  ██║
+██████╔╝█████╗  ██║     ██║   ██║██╔██╗ ██║█████╗  ██║   ██║███████╗██║██║   ██║██╔██╗ ██║
+██╔══██╗██╔══╝  ██║     ██║   ██║██║╚██╗██║██╔══╝  ██║   ██║╚════██║██║██║   ██║██║╚██╗██║
+██║  ██║███████╗╚██████╗╚██████╔╝██║ ╚████║██║     ╚██████╔╝███████║██║╚██████╔╝██║ ╚████║
+╚═╝  ╚═╝╚══════╝ ╚═════╝ ╚═════╝ ╚═╝  ╚═══╝╚═╝      ╚═════╝ ╚══════╝╚═╝ ╚═════╝ ╚═╝  ╚═══╝
+    </pre>
+  </div>
+
+  <!-- Disclaimer -->
+  <div class="disclaimer">
+    <div class="icon">⚠️</div>
+    <p>
+      <strong>LEGAL NOTICE:</strong> This tool is intended for <strong>AUTHORIZED SECURITY TESTING ONLY</strong>.
+      Unauthorized use against systems you do not own or have explicit written permission to test is <strong>illegal</strong>
+      and may result in criminal prosecution. The developers assume NO liability for misuse.
+      Always obtain proper written authorization before scanning any target.
+    </p>
+  </div>
+
+  <!-- Quick Install -->
+  <div class="install-box">
+    <span class="install-cmd">$ sudo bash setup.sh &nbsp;&nbsp;→&nbsp;&nbsp; python3 reconfusion.py -d example.com -o myproject</span>
+    <button class="copy-btn" onclick="navigator.clipboard.writeText('sudo bash setup.sh').then(()=>this.textContent='COPIED!').catch(()=>{})">COPY INSTALL</button>
+  </div>
+
+  <!-- Terminal Demo -->
+  <div class="terminal">
+    <div class="terminal-bar">
+      <div class="dot dot-r"></div>
+      <div class="dot dot-y"></div>
+      <div class="dot dot-g"></div>
+      <span class="terminal-title">kali@reconfusion: ~ [M7 BATMAN EDITION]</span>
+    </div>
+    <div class="terminal-body">
+      <div><span class="t-prompt">┌──(kali㉿batman)-[~]</span></div>
+      <div><span class="t-prompt">└─$ </span><span class="t-cmd">python3 reconfusion.py -d target.com -o pentest-2024</span></div>
+      <div>&nbsp;</div>
+      <div><span class="t-yellow">██████╗ ███████╗ ██████╗ ██████╗ ███╗   ██╗ ... M7</span></div>
+      <div>&nbsp;</div>
+      <div><span class="t-cyan">╔═══════════════════════════════════════════╗</span></div>
+      <div><span class="t-cyan">║  🦇 ReconFusion M7 – Mission Briefing      ║</span></div>
+      <div><span class="t-cyan">║  Target : </span><span class="t-yellow">target.com</span><span class="t-cyan">                         ║</span></div>
+      <div><span class="t-cyan">║  Output : </span><span class="t-yellow">pentest-2024/</span><span class="t-cyan">                       ║</span></div>
+      <div><span class="t-cyan">╚═══════════════════════════════════════════╝</span></div>
+      <div>&nbsp;</div>
+      <div><span class="t-orange">⚠️  LEGAL DISCLAIMER &amp; SCOPE VALIDATION</span></div>
+      <div><span class="t-white">Do you have explicit authorization? </span><span class="t-yellow">(yes/no): yes</span></div>
+      <div><span class="t-green">✅ Scope validated. Starting recon pipeline...</span></div>
+      <div>&nbsp;</div>
+      <div><span class="t-yellow">⚙️  Checking &amp; Installing Required Tools...</span></div>
+      <div><span class="t-green">  ✅ All tools are already installed!</span></div>
+      <div>&nbsp;</div>
+      <div><span class="t-cyan">━━━ 🌐 Phase 1 – Subdomain Enumeration ━━━</span></div>
+      <div><span class="t-dim">  assetfinder → 142 results</span></div>
+      <div><span class="t-dim">  subfinder   → 198 results</span></div>
+      <div><span class="t-dim">  amass       → 87 results</span></div>
+      <div><span class="t-green">  ✅ Total unique subdomains: <span class="t-yellow">243</span></span></div>
+      <div>&nbsp;</div>
+      <div><span class="t-cyan">━━━ 🌍 Phase 2 – Live Host Detection ━━━</span></div>
+      <div><span class="t-green">  ✅ Live hosts detected: <span class="t-yellow">67</span></span></div>
+      <div>&nbsp;</div>
+      <div><span class="t-cyan">━━━ 🔎 Phase 3 – Port Scanning ━━━</span></div>
+      <div><span class="t-green">  ✅ Open ports found: <span class="t-yellow">312</span></span></div>
+      <div>&nbsp;</div>
+      <div><span class="t-cyan">━━━ 🧪 Phase 4 – Advanced Scanning ━━━</span></div>
+      <div><span class="t-dim">  katana  → 1,847 URLs crawled</span></div>
+      <div><span class="t-red">  dalfox  → 3 XSS vulnerabilities!</span></div>
+      <div><span class="t-orange">  nuclei  → 12 vulnerabilities found</span></div>
+      <div>&nbsp;</div>
+      <div><span class="t-cyan">━━━ 📊 Phase 5 – Analysis ━━━</span></div>
+      <div><span class="t-cyan">━━━ 📄 Phase 6 – Generating Report ━━━</span></div>
+      <div><span class="t-green">  ✅ Report saved: pentest-2024/reports/final_report.html</span></div>
+      <div>&nbsp;</div>
+      <div><span class="t-yellow">🎯 Mission Complete! Duration: 847s</span></div>
+      <div><span class="t-prompt">└─$ </span><span class="cursor"></span></div>
+    </div>
+  </div>
+
+  <!-- Stats Preview -->
+  <div class="stats-row">
+    <div class="stat-box"><div class="stat-n">243</div><div class="stat-l">Subdomains</div></div>
+    <div class="stat-box"><div class="stat-n">67</div><div class="stat-l">Live Hosts</div></div>
+    <div class="stat-box"><div class="stat-n">312</div><div class="stat-l">Open Ports</div></div>
+    <div class="stat-box critical"><div class="stat-n">2</div><div class="stat-l">Critical</div></div>
+    <div class="stat-box high"><div class="stat-n">7</div><div class="stat-l">High Severity</div></div>
+  </div>
+
+  <!-- Phase Cards -->
+  <div class="section-heading">🔬 Scanning Phases</div>
+  <div class="phases-grid">
+    <div class="phase-card">
+      <div class="phase-num">Phase 0</div>
+      <div class="phase-title">🔐 Scope Validation</div>
+      <div class="phase-tools">
+        <span class="tool-badge">auth-check</span>
+        <span class="tool-badge">scope-log</span>
+        <span class="tool-badge">dir-setup</span>
+      </div>
+      <div class="phase-desc">Mandatory authorization confirmation, timestamp logging, and project folder structure creation before any scanning begins.</div>
+    </div>
+
+    <div class="phase-card">
+      <div class="phase-num">Phase 1</div>
+      <div class="phase-title">🌐 Subdomain Enumeration</div>
+      <div class="phase-tools">
+        <span class="tool-badge">assetfinder</span>
+        <span class="tool-badge">subfinder</span>
+        <span class="tool-badge">amass</span>
+      </div>
+      <div class="phase-desc">Parallel subdomain discovery using 3 tools. Results are merged, deduplicated, and normalized automatically.</div>
+    </div>
+
+    <div class="phase-card">
+      <div class="phase-num">Phase 2</div>
+      <div class="phase-title">🌍 Live Host Detection</div>
+      <div class="phase-tools">
+        <span class="tool-badge">httpx</span>
+        <span class="tool-badge">status-codes</span>
+        <span class="tool-badge">headers</span>
+      </div>
+      <div class="phase-desc">Probe all subdomains for live HTTP/HTTPS hosts. Captures status codes, server headers, content-type, and page titles.</div>
+    </div>
+
+    <div class="phase-card">
+      <div class="phase-num">Phase 3</div>
+      <div class="phase-title">🔎 Port Scanning</div>
+      <div class="phase-tools">
+        <span class="tool-badge">naabu</span>
+        <span class="tool-badge">nmap</span>
+        <span class="tool-badge">services</span>
+      </div>
+      <div class="phase-desc">Fast port scanning with naabu (primary) or nmap (fallback). Identifies open ports, services, and IP addresses.</div>
+    </div>
+
+    <div class="phase-card">
+      <div class="phase-num">Phase 4</div>
+      <div class="phase-title">🧪 Advanced Scanning</div>
+      <div class="phase-tools">
+        <span class="tool-badge">katana</span>
+        <span class="tool-badge">dalfox</span>
+        <span class="tool-badge">nuclei</span>
+      </div>
+      <div class="phase-desc">URL crawling → XSS testing → Template-based CVE scanning. Full pipeline for comprehensive vulnerability discovery.</div>
+    </div>
+
+    <div class="phase-card">
+      <div class="phase-num">Phase 5 + 6</div>
+      <div class="phase-title">📊 Analysis + Report</div>
+      <div class="phase-tools">
+        <span class="tool-badge">parser</span>
+        <span class="tool-badge">jinja2</span>
+        <span class="tool-badge">bootstrap</span>
+      </div>
+      <div class="phase-desc">Intelligent deduplication, severity grouping, and a beautiful dark-themed HTML report with collapsible findings.</div>
+    </div>
+  </div>
+
+  <!-- Output Tree -->
+  <div class="section-heading">📂 Output Structure</div>
+  <div class="output-tree">
+    <span class="folder">project-folder/</span><br>
+    &nbsp;&nbsp;<span class="folder">├── raw/</span><br>
+    &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="file">├── assetfinder.txt</span><br>
+    &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="file">├── subfinder.txt</span><br>
+    &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="file">└── amass.txt</span><br>
+    &nbsp;&nbsp;<span class="folder">├── processed/</span><br>
+    &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="file">├── all_subdomains.txt</span> &nbsp;<span class="comment">← merged + deduped</span><br>
+    &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="file">├── live_hosts.txt</span><br>
+    &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="file">├── live_hosts.json</span><br>
+    &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="file">└── analysis.json</span><br>
+    &nbsp;&nbsp;<span class="folder">├── scans/</span><br>
+    &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="file">├── open_ports.txt / .json</span><br>
+    &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="file">├── katana_urls.txt</span><br>
+    &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="file">├── dalfox_results.txt</span><br>
+    &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="file">└── nuclei_results.txt</span><br>
+    &nbsp;&nbsp;<span class="folder">├── reports/</span><br>
+    &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="report">└── final_report.html</span> &nbsp;<span class="comment">← 📊 MAIN REPORT</span><br>
+    &nbsp;&nbsp;<span class="folder">└── logs/</span><br>
+    &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="file">├── reconfusion.log</span><br>
+    &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="file">└── scope.json</span>
+  </div>
+
+  <!-- Features -->
+  <div class="features-section">
+    <div class="section-heading">⚡ Key Features</div>
+    <ul class="feature-list">
+      <li><span class="icon">🤖</span> Auto-installs all missing tools on first run</li>
+      <li><span class="icon">⚡</span> Async parallel execution (Phase 1)</li>
+      <li><span class="icon">🔐</span> Mandatory authorization check before scanning</li>
+      <li><span class="icon">📊</span> Beautiful dark HTML report with Bootstrap</li>
+      <li><span class="icon">🎨</span> Severity color-coding (Critical/High/Medium/Low)</li>
+      <li><span class="icon">🔄</span> Auto deduplication of findings</li>
+      <li><span class="icon">📁</span> Structured JSON output for all phases</li>
+      <li><span class="icon">🦇</span> M7 Batman themed CLI interface with Rich</li>
+      <li><span class="icon">📝</span> Full audit log with timestamps</li>
+      <li><span class="icon">🔧</span> Single command: scan → analyze → report</li>
+    </ul>
+  </div>
+
+</main>
+
+<footer>
+  <span class="bat">🦇</span>
+  <p>RECONFUSION M7 &nbsp;|&nbsp; PRODUCED BY MILKYWAY INTELLIGENCE</p>
+  <p style="margin-top:8px; font-size:0.65rem; opacity:0.4;">FOR AUTHORIZED SECURITY TESTING ONLY &nbsp;|&nbsp; 2024</p>
+</footer>
+
+</body>
+</html>
