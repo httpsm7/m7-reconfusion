@@ -115,28 +115,33 @@ WORDLISTS = [
 
 def find_tool(name: str) -> str:
     """
-    Find tool binary. Checks go/bin, /usr/local/bin, /usr/bin, then PATH.
-    Returns full path if found, else just name.
+    Find tool binary safely - no PermissionError.
+    Checks home go/bin first, then system paths, then which.
     """
     candidates = [
         Path.home() / "go" / "bin" / name,
-        Path("/root/go/bin") / name,
         Path("/usr/local/bin") / name,
         Path("/usr/bin") / name,
         Path("/snap/bin") / name,
     ]
     for c in candidates:
-        if c.exists() and os.access(str(c), os.X_OK):
-            return str(c)
+        try:
+            if c.exists() and os.access(str(c), os.X_OK):
+                return str(c)
+        except (PermissionError, OSError):
+            continue
     r = subprocess.run(["which", name], capture_output=True, text=True)
     return r.stdout.strip() if r.returncode == 0 else name
 
 
 def tool_exists(name: str) -> bool:
-    path = find_tool(name)
-    if path != name:
-        return True
-    return subprocess.run(["which", name], capture_output=True).returncode == 0
+    try:
+        path = find_tool(name)
+        if path != name:
+            return True
+        return subprocess.run(["which", name], capture_output=True).returncode == 0
+    except Exception:
+        return False
 
 
 def run_cmd(cmd: list, timeout: int = 600, stdin_data: str = None):
@@ -1059,8 +1064,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
-if __name__ == "__main__":
-    main()
-
