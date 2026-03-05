@@ -1,902 +1,1064 @@
 #!/usr/bin/env python3
 """
-██████╗ ███████╗ ██████╗ ██████╗ ███╗   ██╗███████╗██╗   ██╗███████╗██╗ ██████╗ ███╗   ██╗
-██╔══██╗██╔════╝██╔════╝██╔═══██╗████╗  ██║██╔════╝██║   ██║██╔════╝██║██╔═══██╗████╗  ██║
-██████╔╝█████╗  ██║     ██║   ██║██╔██╗ ██║█████╗  ██║   ██║███████╗██║██║   ██║██╔██╗ ██║
-██╔══██╗██╔══╝  ██║     ██║   ██║██║╚██╗██║██╔══╝  ██║   ██║╚════██║██║██║   ██║██║╚██╗██║
-██║  ██║███████╗╚██████╗╚██████╔╝██║ ╚████║██║     ╚██████╔╝███████║██║╚██████╔╝██║ ╚████║
-╚═╝  ╚═╝╚══════╝ ╚═════╝ ╚═════╝ ╚═╝  ╚═══╝╚═╝      ╚═════╝ ╚══════╝╚═╝ ╚═════╝ ╚═╝  ╚═══╝
-                        Produced by MilkyWay Intelligence | M7 BATMAN Edition
+ReconFusion M7 – Modular Recon & Vulnerability Automation Framework
+Produced by MilkyWay Intelligence | M7 BATMAN Edition
+
+PIPELINE (har step ka output agla step ka input hai):
+──────────────────────────────────────────────────────────────────────
+STEP 1  assetfinder + subfinder + amass (parallel)
+           raw/assetfinder.txt
+           raw/subfinder.txt
+           raw/amass.txt
+           ↓ merge + dedupe + normalize
+        01_subdomains_all.txt          ← sirf domain format: sub.ex.com
+
+STEP 2  httpx  ← 01_subdomains_all.txt
+           02_live_hosts_urls.txt      ← URL format: https://sub.ex.com
+           02_live_hosts_info.json     ← {url, status, title, server}
+
+STEP 3  Strip https://  ← 02_live_hosts_urls.txt
+           03_live_domains_clean.txt   ← domain: sub.ex.com  (nmap input)
+
+STEP 4  naabu/nmap  ← 03_live_domains_clean.txt
+           04_open_ports.txt           ← host:port
+           04_open_ports.json
+
+STEP 5  katana  ← 02_live_hosts_urls.txt
+           05_crawled_urls.txt
+
+STEP 6  ffuf  ← 02_live_hosts_urls.txt + wordlist
+           06_fuzz_results.txt
+           06_fuzz_results.json
+
+STEP 7  dalfox  ← 05_crawled_urls.txt
+           07_xss_findings.txt
+           07_xss_findings.json
+
+STEP 8  nuclei  ← 02_live_hosts_urls.txt
+           08_nuclei_findings.txt
+           08_nuclei_findings.json
+
+STEP 9  Merge + dedupe  ← 07.json + 08.json
+           09_all_findings.json
+
+STEP 10 HTML Report  ← all data
+           10_final_report.html
+──────────────────────────────────────────────────────────────────────
 """
 
 import argparse
 import asyncio
 import json
 import os
+import re
 import subprocess
 import sys
-import time
 from datetime import datetime
 from pathlib import Path
+from urllib.parse import urlparse
 
-# Auto-install dependencies
-def auto_install():
-    packages = ["rich", "jinja2"]
-    for pkg in packages:
+# ── Bootstrap Python deps ──────────────────────────────────────────────────────
+def bootstrap():
+    for imp, pkg in [("rich", "rich"), ("jinja2", "jinja2")]:
         try:
-            __import__(pkg.replace("-", "_"))
+            __import__(imp)
         except ImportError:
             print(f"[*] Installing {pkg}...")
-            subprocess.run([sys.executable, "-m", "pip", "install", pkg, "--break-system-packages", "-q"], check=True)
+            subprocess.run(
+                [sys.executable, "-m", "pip", "install", pkg,
+                 "--break-system-packages", "-q"],
+                check=True,
+            )
 
-auto_install()
+bootstrap()
 
 from rich.console import Console
 from rich.panel import Panel
-from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TimeElapsedColumn
 from rich.table import Table
-from rich.text import Text
-from rich.live import Live
-from rich.align import Align
-from rich import print as rprint
-from rich.style import Style
 import jinja2
 
 console = Console()
 
-BATMAN_LOGO = r"""
-         .
-        ":"
-      ___:____     |"\/"|
-    ,'        `.    \  /
-    |  O        \___/  |
-   ~|_  ,--.  ,    -'~|
-    |___|'._ `|  |     |   
-    |   |  |  `|  |     |
-   /|   |  |   |  |     |\
-  / |   |  |   |  |     | \
- /  |___|  |___|  |_____|  \
-/___________________________\
-   M 7   B A T M A N
-"""
-
-BANNER = """
-[bold yellow]
-██████╗ ███████╗ ██████╗ ██████╗ ███╗   ██╗███████╗██╗   ██╗███████╗██╗ ██████╗ ███╗   ██╗
-██╔══██╗██╔════╝██╔════╝██╔═══██╗████╗  ██║██╔════╝██║   ██║██╔════╝██║██╔═══██╗████╗  ██║
-██████╔╝█████╗  ██║     ██║   ██║██╔██╗ ██║█████╗  ██║   ██║███████╗██║██║   ██║██╔██╗ ██║
-██╔══██╗██╔══╝  ██║     ██║   ██║██║╚██╗██║██╔══╝  ██║   ██║╚════██║██║██║   ██║██║╚██╗██║
-██║  ██║███████╗╚██████╗╚██████╔╝██║ ╚████║██║     ╚██████╔╝███████║██║╚██████╔╝██║ ╚████║
-╚═╝  ╚═╝╚══════╝ ╚═════╝ ╚═════╝ ╚═╝  ╚═══╝╚═╝      ╚═════╝ ╚══════╝╚═╝ ╚═════╝ ╚═╝  ╚═══╝
-[/bold yellow]
-[bold cyan]                    ⚡ Modular Recon & Vulnerability Automation Framework ⚡[/bold cyan]
+BANNER = """[bold yellow]
+\u2588\u2588\u2588\u2588\u2588\u2588\u2557 \u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2557 \u2588\u2588\u2588\u2588\u2588\u2588\u2557 \u2588\u2588\u2588\u2588\u2588\u2588\u2557 \u2588\u2588\u2588\u2557   \u2588\u2588\u2557\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2557\u2588\u2588\u2557   \u2588\u2588\u2557\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2557\u2588\u2588\u2557 \u2588\u2588\u2588\u2588\u2588\u2588\u2557 \u2588\u2588\u2588\u2557   \u2588\u2588\u2557
+\u2588\u2588\u2554\u2550\u2550\u2588\u2588\u2557\u2588\u2588\u2554\u2550\u2550\u2550\u2550\u255d\u2588\u2588\u2554\u2550\u2550\u2550\u2550\u255d\u2588\u2588\u2554\u2550\u2550\u2550\u2588\u2588\u2557\u2588\u2588\u2588\u2588\u2557  \u2588\u2588\u2551\u2588\u2588\u2554\u2550\u2550\u2550\u2550\u255d\u2588\u2588\u2551   \u2588\u2588\u2551\u2588\u2588\u2554\u2550\u2550\u2550\u2550\u255d\u2588\u2588\u2551\u2588\u2588\u2554\u2550\u2550\u2550\u2588\u2588\u2557\u2588\u2588\u2588\u2588\u2557  \u2588\u2588\u2551
+\u2588\u2588\u2588\u2588\u2588\u2588\u2554\u255d\u2588\u2588\u2588\u2588\u2588\u2557  \u2588\u2588\u2551     \u2588\u2588\u2551   \u2588\u2588\u2551\u2588\u2588\u2554\u2588\u2588\u2557 \u2588\u2588\u2551\u2588\u2588\u2588\u2588\u2588\u2557  \u2588\u2588\u2551   \u2588\u2588\u2551\u2588\u2588\u2588\u2588\u2588\u2557  \u2588\u2588\u2551\u2588\u2588\u2551   \u2588\u2588\u2551\u2588\u2588\u2554\u2588\u2588\u2557 \u2588\u2588\u2551
+\u2588\u2588\u2554\u2550\u2550\u2588\u2588\u2557\u2588\u2588\u2554\u2550\u2550\u255d  \u2588\u2588\u2551     \u2588\u2588\u2551   \u2588\u2588\u2551\u2588\u2588\u2551\u255a\u2588\u2588\u2557\u2588\u2588\u2551\u2588\u2588\u2554\u2550\u2550\u255d  \u2588\u2588\u2551   \u2588\u2588\u2551\u2588\u2588\u2554\u2550\u2550\u255d  \u2588\u2588\u2551\u2588\u2588\u2551   \u2588\u2588\u2551\u2588\u2588\u2551\u255a\u2588\u2588\u2557\u2588\u2588\u2551
+\u2588\u2588\u2551  \u2588\u2588\u2551\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2557\u255a\u2588\u2588\u2588\u2588\u2588\u2588\u2557\u255a\u2588\u2588\u2588\u2588\u2588\u2588\u2554\u255d\u2588\u2588\u2551 \u255a\u2588\u2588\u2588\u2588\u2551\u2588\u2588\u2551     \u255a\u2588\u2588\u2588\u2588\u2588\u2588\u2554\u255d\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2557\u2588\u2588\u2551\u255a\u2588\u2588\u2588\u2588\u2588\u2588\u2554\u255d\u2588\u2588\u2551 \u255a\u2588\u2588\u2588\u2588\u2551
+\u255a\u2550\u255d  \u255a\u2550\u255d\u255a\u2550\u2550\u2550\u2550\u2550\u2550\u255d \u255a\u2550\u2550\u2550\u2550\u2550\u255d \u255a\u2550\u2550\u2550\u2550\u2550\u255d \u255a\u2550\u255d  \u255a\u2550\u2550\u2550\u255d\u255a\u2550\u255d      \u255a\u2550\u2550\u2550\u2550\u2550\u255d\u255a\u2550\u2550\u2550\u2550\u2550\u2550\u255d\u255a\u2550\u255d \u255a\u2550\u2550\u2550\u2550\u2550\u255d\u255a\u2550\u255d  \u255a\u2550\u2550\u2550\u255d
+[/bold yellow][bold cyan]                    \u26a1 Modular Recon & Vulnerability Automation Framework \u26a1[/bold cyan]
 [dim]                         Produced by MilkyWay Intelligence | M7 BATMAN Edition[/dim]
 """
 
-TOOLS_REQUIRED = {
+# ── Tool install commands ──────────────────────────────────────────────────────
+TOOL_INSTALL = {
     "assetfinder": "go install github.com/tomnomnom/assetfinder@latest",
-    "subfinder": "go install -v github.com/projectdiscovery/subfinder/v2/cmd/subfinder@latest",
-    "amass": "sudo apt install amass -y",
-    "httpx": "go install -v github.com/projectdiscovery/httpx/cmd/httpx@latest",
-    "naabu": "go install -v github.com/projectdiscovery/naabu/v2/cmd/naabu@latest",
-    "nmap": "sudo apt install nmap -y",
-    "katana": "go install github.com/projectdiscovery/katana/cmd/katana@latest",
-    "dalfox": "go install github.com/hahwul/dalfox/v2@latest",
-    "nuclei": "go install -v github.com/projectdiscovery/nuclei/v2/cmd/nuclei@latest",
+    "subfinder":   "go install -v github.com/projectdiscovery/subfinder/v2/cmd/subfinder@latest",
+    "amass":       "sudo apt-get install -y amass",
+    "httpx":       "go install -v github.com/projectdiscovery/httpx/cmd/httpx@latest",
+    "naabu":       "go install -v github.com/projectdiscovery/naabu/v2/cmd/naabu@latest",
+    "nmap":        "sudo apt-get install -y nmap",
+    "katana":      "go install github.com/projectdiscovery/katana/cmd/katana@latest",
+    "ffuf":        "go install github.com/ffuf/ffuf/v2@latest",
+    "dalfox":      "go install github.com/hahwul/dalfox/v2@latest",
+    "nuclei":      "go install -v github.com/projectdiscovery/nuclei/v2/cmd/nuclei@latest",
 }
 
+WORDLISTS = [
+    "/usr/share/wordlists/dirb/common.txt",
+    "/usr/share/seclists/Discovery/Web-Content/common.txt",
+    "/usr/share/wordlists/dirbuster/directory-list-2.3-small.txt",
+    "/usr/share/wordlists/dirb/small.txt",
+]
+
+# ── Helpers ────────────────────────────────────────────────────────────────────
+
+def find_tool(name: str) -> str:
+    """
+    Find tool binary. Checks go/bin, /usr/local/bin, /usr/bin, then PATH.
+    Returns full path if found, else just name.
+    """
+    candidates = [
+        Path.home() / "go" / "bin" / name,
+        Path("/root/go/bin") / name,
+        Path("/usr/local/bin") / name,
+        Path("/usr/bin") / name,
+        Path("/snap/bin") / name,
+    ]
+    for c in candidates:
+        if c.exists() and os.access(str(c), os.X_OK):
+            return str(c)
+    r = subprocess.run(["which", name], capture_output=True, text=True)
+    return r.stdout.strip() if r.returncode == 0 else name
+
+
+def tool_exists(name: str) -> bool:
+    path = find_tool(name)
+    if path != name:
+        return True
+    return subprocess.run(["which", name], capture_output=True).returncode == 0
+
+
+def run_cmd(cmd: list, timeout: int = 600, stdin_data: str = None):
+    """Run a command. Returns (stdout, stderr, returncode)."""
+    try:
+        r = subprocess.run(
+            cmd, capture_output=True, text=True,
+            timeout=timeout, input=stdin_data,
+        )
+        return r.stdout, r.stderr, r.returncode
+    except subprocess.TimeoutExpired:
+        return "", f"TIMEOUT after {timeout}s", 1
+    except FileNotFoundError:
+        return "", f"NOT FOUND: {cmd[0]}", 127
+    except Exception as e:
+        return "", str(e), 1
+
+
+def read_lines(path: Path) -> list:
+    if not path.exists():
+        return []
+    return [l.strip() for l in path.read_text(errors="ignore").splitlines() if l.strip()]
+
+
+def write_lines(path: Path, lines: list):
+    path.write_text("\n".join(lines) + ("\n" if lines else ""))
+
+
+def url_to_domain(url: str) -> str:
+    """https://sub.example.com/any/path?q=1  →  sub.example.com"""
+    url = url.strip()
+    if not url:
+        return ""
+    if "://" not in url:
+        url = "http://" + url
+    try:
+        h = urlparse(url).hostname or ""
+        return h.lower().strip(".")
+    except Exception:
+        return url
+
+
+def find_wordlist():
+    for w in WORDLISTS:
+        if Path(w).exists():
+            return w
+    return None
+
+
+# ── Printing helpers ───────────────────────────────────────────────────────────
+def step_banner(n: int, title: str, detail: str = ""):
+    body = f"[dim]{detail}[/dim]" if detail else ""
+    console.print(Panel(
+        body,
+        title=f"[bold yellow]STEP {n:02d}  ─  {title}[/bold yellow]",
+        border_style="yellow", padding=(0, 2),
+    ))
+
+def ok(m):   console.print(f"  [bold green]\u2714[/bold green]  {m}")
+def info(m): console.print(f"  [cyan]\u2192[/cyan]  {m}")
+def warn(m): console.print(f"  [yellow]\u26a0[/yellow]  {m}")
+def fail(m): console.print(f"  [red]\u2718[/red]  {m}")
+
+
+# ── ReconFusion class ──────────────────────────────────────────────────────────
+
 class ReconFusion:
-    def __init__(self, target: str, output_dir: str):
-        self.target = target
-        self.output_dir = Path(output_dir)
-        self.start_time = datetime.now()
+
+    def __init__(self, target: str, outdir: str):
+        # Normalize target: strip protocol & trailing slash
+        t = target.strip().lower()
+        t = re.sub(r"^https?://", "", t).rstrip("/")
+        self.target    = t
+        self.outdir    = Path(outdir)
+        self.start_ts  = datetime.now()
+        self.log_path  = self.outdir / "reconfusion.log"
+
+        # Pipeline state ─ passed between steps
+        self.subdomains:   list = []   # sub.example.com
+        self.live_urls:    list = []   # https://sub.example.com
+        self.live_info:    list = []   # [{url, status, title, server}]
+        self.live_domains: list = []   # sub.example.com  (for nmap)
+        self.open_ports:   list = []   # [{host, ip, port, tool}]
+        self.crawled_urls: list = []   # all katana output
+        self.findings:     list = []   # all vulnerabilities
+
         self.stats = {
-            "subdomains": 0,
-            "live_hosts": 0,
-            "open_ports": 0,
-            "vulnerabilities": {"critical": 0, "high": 0, "medium": 0, "low": 0, "info": 0},
+            "subdomains":   0,
+            "live_hosts":   0,
+            "open_ports":   0,
+            "crawled_urls": 0,
+            "fuzz_hits":    0,
+            "vulns": {"critical": 0, "high": 0, "medium": 0, "low": 0, "info": 0},
         }
-        self.findings = []
-        self.live_hosts = []
-        self.open_ports = []
-        self.all_subdomains = []
+
+    # ── Helpers ──────────────────────────────────────────────────────────────
 
     def setup_dirs(self):
-        dirs = ["raw", "processed", "scans", "reports", "logs"]
-        for d in dirs:
-            (self.output_dir / d).mkdir(parents=True, exist_ok=True)
+        self.outdir.mkdir(parents=True, exist_ok=True)
+        (self.outdir / "raw").mkdir(exist_ok=True)
+        (self.outdir / "raw_fuzz").mkdir(exist_ok=True)
+        self.log_path.touch()
 
-    def log(self, message: str, level: str = "info"):
-        log_file = self.output_dir / "logs" / "reconfusion.log"
-        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        with open(log_file, "a") as f:
-            f.write(f"[{timestamp}] [{level.upper()}] {message}\n")
+    def log(self, msg: str):
+        ts = datetime.now().strftime("%H:%M:%S")
+        with open(self.log_path, "a") as f:
+            f.write(f"[{ts}] {msg}\n")
 
-    def check_tool(self, tool: str) -> bool:
-        result = subprocess.run(["which", tool], capture_output=True, text=True)
-        return result.returncode == 0
+    def p(self, step: int, name: str) -> Path:
+        """Numbered output file path: step=2, name=live_hosts_urls.txt → outdir/02_live_hosts_urls.txt"""
+        return self.outdir / f"{step:02d}_{name}"
 
-    def get_tool_path(self, tool: str) -> str:
-        """Find the correct path for a tool, checking common locations."""
-        locations = [
-            f"/home/kali/go/bin/{tool}",
-            f"/root/go/bin/{tool}",
-            f"/usr/local/bin/{tool}",
-            f"/usr/bin/{tool}",
-        ]
-        for loc in locations:
-            if Path(loc).exists():
-                return loc
-        # fallback to which
-        result = subprocess.run(["which", tool], capture_output=True, text=True)
-        if result.returncode == 0:
-            return result.stdout.strip()
-        return tool  # hope it's in PATH
-
-    def auto_install_tools(self):
-        console.print("\n[bold cyan]⚙️  Checking & Installing Required Tools...[/bold cyan]")
-        missing = []
-        for tool in TOOLS_REQUIRED:
-            if not self.check_tool(tool):
-                missing.append(tool)
-
-        if not missing:
-            console.print("[bold green]✅ All tools are already installed![/bold green]")
-            return
-
-        console.print(f"[yellow]⚠️  Missing tools: {', '.join(missing)}[/yellow]")
-        console.print("[cyan]🚀 Auto-installing missing tools...[/cyan]\n")
-
-        for tool in missing:
-            with console.status(f"[bold yellow]Installing {tool}...[/bold yellow]"):
-                try:
-                    cmd = TOOLS_REQUIRED[tool]
-                    result = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=120)
-                    if result.returncode == 0:
-                        console.print(f"  [green]✅ {tool} installed successfully[/green]")
-                    else:
-                        console.print(f"  [red]❌ Failed to install {tool}[/red]")
-                        console.print(f"     [dim]Manual: {cmd}[/dim]")
-                except Exception as e:
-                    console.print(f"  [red]❌ {tool}: {e}[/red]")
-
-    def run_command(self, cmd: list, timeout: int = 300) -> tuple:
-        try:
-            result = subprocess.run(
-                cmd, capture_output=True, text=True, timeout=timeout
-            )
-            return result.stdout, result.stderr, result.returncode
-        except subprocess.TimeoutExpired:
-            return "", "Timeout", 1
-        except FileNotFoundError:
-            return "", f"Tool not found: {cmd[0]}", 1
-        except Exception as e:
-            return "", str(e), 1
-
-    # ─── PHASE 0: Scope Validation ────────────────────────────────────────────
-    def phase0_scope_validation(self) -> bool:
+    # ══════════════════════════════════════════════════════════════════════════
+    # AUTH
+    # ══════════════════════════════════════════════════════════════════════════
+    def phase_auth(self) -> bool:
         console.print(Panel(
-            "[bold red]⚠️  LEGAL DISCLAIMER & SCOPE VALIDATION[/bold red]\n\n"
-            "[yellow]This tool is intended for AUTHORIZED security testing ONLY.\n"
-            "Unauthorized scanning is ILLEGAL and may result in criminal prosecution.\n"
-            "By proceeding, you confirm that you have explicit written permission\n"
-            "to test the target system.[/yellow]",
-            title="[bold red]🔐 Phase 0 – Authorization Check[/bold red]",
-            border_style="red"
+            "[bold red]\u26a0  LEGAL DISCLAIMER[/bold red]\n\n"
+            "[yellow]This tool is for AUTHORIZED security testing ONLY.\n"
+            "Unauthorized scanning is ILLEGAL.\n"
+            "You must have explicit written permission to test the target.[/yellow]",
+            border_style="red",
         ))
-
-        console.print(f"\n[bold]Target:[/bold] [cyan]{self.target}[/cyan]")
-        console.print(f"[bold]Output:[/bold] [cyan]{self.output_dir}[/cyan]")
-        console.print(f"[bold]Timestamp:[/bold] [cyan]{self.start_time.strftime('%Y-%m-%d %H:%M:%S')}[/cyan]\n")
-
-        confirm = console.input(
-            "[bold yellow]Do you have explicit authorization to test this target? (yes/no): [/bold yellow]"
+        console.print(f"\n  Target : [bold cyan]{self.target}[/bold cyan]")
+        console.print(f"  Output : [bold cyan]{self.outdir}[/bold cyan]")
+        console.print(f"  Time   : [bold cyan]{self.start_ts.strftime('%Y-%m-%d %H:%M:%S')}[/bold cyan]\n")
+        ans = console.input(
+            "[bold yellow]  Do you have written authorization to test this target? (yes/no): [/bold yellow]"
         ).strip().lower()
-
-        if confirm not in ("yes", "y"):
-            console.print("[bold red]❌ Authorization not confirmed. Exiting.[/bold red]")
+        if ans not in ("yes", "y"):
+            console.print("[red]  Exiting — authorization not confirmed.[/red]")
             return False
-
         self.setup_dirs()
-        scope_log = {
-            "target": self.target,
-            "timestamp": self.start_time.isoformat(),
-            "authorized": True,
-            "output_directory": str(self.output_dir)
-        }
-        with open(self.output_dir / "logs" / "scope.json", "w") as f:
-            json.dump(scope_log, f, indent=2)
-
-        self.log(f"Scope validated for target: {self.target}")
-        console.print("[bold green]✅ Scope validated. Starting recon pipeline...[/bold green]\n")
+        self.log(f"AUTH OK for: {self.target}")
+        ok("Authorization confirmed.")
         return True
 
-    # ─── PHASE 1: Subdomain Enumeration ───────────────────────────────────────
-    async def phase1_subdomain_enum(self):
+    # ══════════════════════════════════════════════════════════════════════════
+    # TOOL CHECK
+    # ══════════════════════════════════════════════════════════════════════════
+    def phase_tools(self):
         console.print(Panel(
-            "[bold cyan]Running: assetfinder | subfinder | amass (passive)[/bold cyan]",
-            title="[bold cyan]🌐 Phase 1 – Subdomain Enumeration[/bold cyan]",
-            border_style="cyan"
+            "[bold cyan]Checking all required tools...[/bold cyan]",
+            title="[bold yellow]\u2699  TOOL CHECK[/bold yellow]",
+            border_style="yellow",
         ))
+        for tool, install_cmd in TOOL_INSTALL.items():
+            if tool_exists(tool):
+                path = find_tool(tool)
+                ok(f"[cyan]{tool:15}[/cyan] [dim]{path}[/dim]")
+                self.log(f"TOOL OK: {tool} @ {path}")
+            else:
+                warn(f"[cyan]{tool:15}[/cyan] not found — installing...")
+                env = os.environ.copy()
+                env["PATH"] = env.get("PATH", "") + ":" + str(Path.home() / "go" / "bin")
+                r = subprocess.run(
+                    install_cmd, shell=True, capture_output=True,
+                    text=True, timeout=180, env=env,
+                )
+                if r.returncode == 0:
+                    ok(f"{tool} installed successfully.")
+                else:
+                    fail(f"{tool} install failed.\n     Run manually: [dim]{install_cmd}[/dim]")
+                self.log(f"INSTALL {tool}: rc={r.returncode}")
 
-        tasks = [
-            self._run_assetfinder(),
-            self._run_subfinder(),
-            self._run_amass(),
-        ]
-        await asyncio.gather(*tasks)
+    # ══════════════════════════════════════════════════════════════════════════
+    # STEP 1 — Subdomain Enumeration
+    # OUTPUT : 01_subdomains_all.txt
+    # ══════════════════════════════════════════════════════════════════════════
+    async def step01_subdomains(self):
+        step_banner(1, "SUBDOMAIN ENUMERATION",
+                    "assetfinder + subfinder + amass (parallel) → merge → dedupe → 01_subdomains_all.txt")
 
-        # Merge & deduplicate
-        all_subs = set()
-        for fname in ["assetfinder.txt", "subfinder.txt", "amass.txt"]:
-            fpath = self.output_dir / "raw" / fname
-            if fpath.exists():
-                with open(fpath) as f:
-                    for line in f:
-                        line = line.strip().lower()
-                        if line and self.target in line:
-                            all_subs.add(line)
-
-        sorted_subs = sorted(all_subs)
-        self.all_subdomains = sorted_subs
-
-        with open(self.output_dir / "processed" / "all_subdomains.txt", "w") as f:
-            f.write("\n".join(sorted_subs))
-
-        self.stats["subdomains"] = len(sorted_subs)
-        self.log(f"Total unique subdomains: {len(sorted_subs)}")
-        console.print(f"  [green]✅ Total unique subdomains: [bold]{len(sorted_subs)}[/bold][/green]")
-
-    async def _run_assetfinder(self):
-        with console.status("[yellow]  Running assetfinder...[/yellow]"):
-            af_path = self.get_tool_path("assetfinder")
-            out, err, code = self.run_command([af_path, "--subs-only", self.target])
-            with open(self.output_dir / "raw" / "assetfinder.txt", "w") as f:
-                f.write(out)
-            count = len([l for l in out.splitlines() if l.strip()])
-            console.print(f"  [dim]assetfinder → {count} results[/dim]")
-
-    async def _run_subfinder(self):
-        with console.status("[yellow]  Running subfinder...[/yellow]"):
-            sf_path = self.get_tool_path("subfinder")
-            out, err, code = self.run_command([sf_path, "-d", self.target, "-silent"])
-            with open(self.output_dir / "raw" / "subfinder.txt", "w") as f:
-                f.write(out)
-            count = len([l for l in out.splitlines() if l.strip()])
-            console.print(f"  [dim]subfinder → {count} results[/dim]")
-
-    async def _run_amass(self):
-        with console.status("[yellow]  Running amass (passive)...[/yellow]"):
-            out, err, code = self.run_command(
-                ["amass", "enum", "-passive", "-d", self.target],
-                timeout=180
-            )
-            with open(self.output_dir / "raw" / "amass.txt", "w") as f:
-                f.write(out)
-            count = len([l for l in out.splitlines() if l.strip()])
-            console.print(f"  [dim]amass → {count} results[/dim]")
-
-    # ─── PHASE 2: Live Host Detection ─────────────────────────────────────────
-    def phase2_live_hosts(self):
-        console.print(Panel(
-            "[bold cyan]Running: httpx for live host detection[/bold cyan]",
-            title="[bold cyan]🌍 Phase 2 – Live Host Detection[/bold cyan]",
-            border_style="cyan"
-        ))
-
-        subs_file = self.output_dir / "processed" / "all_subdomains.txt"
-        if not subs_file.exists() or subs_file.stat().st_size == 0:
-            console.print("[yellow]  ⚠️ No subdomains to probe[/yellow]")
-            return
-
-        httpx_path = self.get_tool_path("httpx")
-        out, err, code = self.run_command([
-            httpx_path, "-l", str(subs_file),
-            "-sc", "-title", "-server", "-ct",
-            "-json", "-silent", "-timeout", "10",
-            "-threads", "50", "-retries", "2"
-        ], timeout=600)
-
-        txt_lines = []
-        json_records = []
-
-        for line in out.splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                record = json.loads(line)
-                url = record.get("url", "")
-                status = record.get("status-code", record.get("status_code", ""))
-                server = record.get("webserver", record.get("server", ""))
-                ct = record.get("content-type", record.get("content_type", ""))
-                title = record.get("title", "")
-                txt_lines.append(f"{url} | {status} | {server} | {ct} | {title}")
-                json_records.append({
-                    "url": url, "status_code": status,
-                    "server": server, "content_type": ct, "title": title
-                })
-                self.live_hosts.append({"url": url, "status": status, "title": title, "server": server})
-            except json.JSONDecodeError:
-                # httpx sometimes outputs non-json lines - try to parse plain URL
-                if line.startswith("http"):
-                    txt_lines.append(line)
-
-        # If json parsing got nothing, try plain output mode
-        if not json_records and not out.strip():
-            console.print("  [yellow]  Retrying httpx in plain mode...[/yellow]")
-            out2, err2, code2 = self.run_command([
-                httpx_path, "-l", str(subs_file),
-                "-sc", "-title", "-silent", "-timeout", "10"
-            ], timeout=600)
-            for line in out2.splitlines():
-                line = line.strip()
-                if line and "http" in line:
-                    txt_lines.append(line)
-                    # parse: https://example.com [200]
-                    parts = line.split()
-                    url = parts[0] if parts else line
-                    status = parts[1].strip("[]") if len(parts) > 1 else ""
-                    json_records.append({"url": url, "status_code": status, "server": "", "content_type": "", "title": ""})
-                    self.live_hosts.append({"url": url, "status": status, "title": "", "server": ""})
-
-        with open(self.output_dir / "processed" / "live_hosts.txt", "w") as f:
-            f.write("\n".join(txt_lines))
-        with open(self.output_dir / "processed" / "live_hosts.json", "w") as f:
-            json.dump(json_records, f, indent=2)
-
-        self.stats["live_hosts"] = len(json_records)
-        self.log(f"Live hosts found: {len(json_records)}")
-        console.print(f"  [green]✅ Live hosts detected: [bold]{len(json_records)}[/bold][/green]")
-
-    # ─── PHASE 3: Port Scanning ────────────────────────────────────────────────
-    def phase3_port_scan(self):
-        console.print(Panel(
-            "[bold cyan]Running: naabu / nmap port scanning[/bold cyan]",
-            title="[bold cyan]🔎 Phase 3 – Port Scanning[/bold cyan]",
-            border_style="cyan"
-        ))
-
-        subs_file = self.output_dir / "processed" / "all_subdomains.txt"
-        if not subs_file.exists():
-            return
-
-        # Try naabu first, fallback to nmap
-        if self.check_tool("naabu"):
-            naabu_path = self.get_tool_path("naabu")
-            out, err, code = self.run_command([
-                naabu_path, "-l", str(subs_file), "-json", "-silent", "-top-ports", "100"
-            ], timeout=300)
-            tool_used = "naabu"
-        else:
-            out, err, code = self.run_command([
-                "nmap", "-iL", str(subs_file), "--top-ports", "100", "-oX", "-"
-            ], timeout=300)
-            tool_used = "nmap"
-
-        txt_lines = []
-        json_records = []
-
-        for line in out.splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                record = json.loads(line)
-                ip = record.get("ip", "")
-                port = record.get("port", "")
-                host = record.get("host", "")
-                txt_lines.append(f"{ip} | {port} | {host}")
-                json_records.append({"ip": ip, "port": port, "host": host, "tool": tool_used})
-                self.open_ports.append({"ip": ip, "port": port, "host": host})
-            except json.JSONDecodeError:
-                if line:
-                    txt_lines.append(line)
-
-        with open(self.output_dir / "scans" / "open_ports.txt", "w") as f:
-            f.write("\n".join(txt_lines))
-        with open(self.output_dir / "scans" / "open_ports.json", "w") as f:
-            json.dump(json_records, f, indent=2)
-
-        self.stats["open_ports"] = len(json_records)
-        self.log(f"Open ports found: {len(json_records)}")
-        console.print(f"  [green]✅ Open ports found: [bold]{len(json_records)}[/bold][/green]")
-
-    # ─── PHASE 4: Advanced Scanning ────────────────────────────────────────────
-    def phase4_advanced_scan(self):
-        console.print(Panel(
-            "[bold cyan]Running: katana → dalfox → nuclei[/bold cyan]",
-            title="[bold cyan]🧪 Phase 4 – Advanced Scanning Pipeline[/bold cyan]",
-            border_style="cyan"
-        ))
-
-        live_file = self.output_dir / "processed" / "live_hosts.txt"
-        if not live_file.exists():
-            console.print("[yellow]  ⚠️ No live hosts to scan[/yellow]")
-            return
-
-        # Extract URLs
-        urls = []
-        with open(live_file) as f:
-            for line in f:
-                parts = line.strip().split(" | ")
-                if parts:
-                    urls.append(parts[0])
-
-        # Katana
-        self._run_katana(urls)
-        # Dalfox
-        self._run_dalfox()
-        # Nuclei
-        self._run_nuclei(live_file)
-
-    def _run_katana(self, urls: list):
-        with console.status("[yellow]  Running katana (URL crawling)...[/yellow]"):
-            url_file = self.output_dir / "scans" / "katana_input.txt"
-            with open(url_file, "w") as f:
-                f.write("\n".join(urls[:50]))
-
-            if not urls:
-                console.print("  [yellow]  No URLs to crawl[/yellow]")
-                with open(self.output_dir / "scans" / "katana_urls.txt", "w") as f:
-                    f.write("")
-                return
-
-            katana_path = self.get_tool_path("katana")
-            out, err, code = self.run_command([
-                katana_path, "-list", str(url_file), "-silent", "-depth", "2",
-                "-timeout", "10", "-retry", "1"
-            ], timeout=300)
-
-            with open(self.output_dir / "scans" / "katana_urls.txt", "w") as f:
-                f.write(out)
-            count = len([l for l in out.splitlines() if l.strip()])
-            console.print(f"  [dim]katana → {count} URLs crawled[/dim]")
-
-    def _run_dalfox(self):
-        with console.status("[yellow]  Running dalfox (XSS testing)...[/yellow]"):
-            katana_file = self.output_dir / "scans" / "katana_urls.txt"
-            if not katana_file.exists() or katana_file.stat().st_size == 0:
-                with open(self.output_dir / "scans" / "dalfox_results.txt", "w") as f:
-                    f.write("")
-                return
-
-            dalfox_path = self.get_tool_path("dalfox")
-            out, err, code = self.run_command([
-                dalfox_path, "file", str(katana_file), "--silence", "--format", "json"
-            ], timeout=300)
-
-            with open(self.output_dir / "scans" / "dalfox_results.txt", "w") as f:
-                f.write(out)
-
-            # Parse findings
-            for line in out.splitlines():
-                try:
-                    rec = json.loads(line)
-                    self.findings.append({
-                        "type": "XSS",
-                        "url": rec.get("data", {}).get("url", ""),
-                        "parameter": rec.get("data", {}).get("param", ""),
-                        "severity": "high",
-                        "tool": "dalfox",
-                        "detail": str(rec)
-                    })
-                    self.stats["vulnerabilities"]["high"] += 1
-                except:
-                    pass
-
-            count = len([l for l in out.splitlines() if l.strip()])
-            console.print(f"  [dim]dalfox → {count} potential XSS findings[/dim]")
-
-    def _run_nuclei(self, live_file: Path):
-        with console.status("[yellow]  Running nuclei (template scanning)...[/yellow]"):
-            nuclei_path = self.get_tool_path("nuclei")
-            out, err, code = self.run_command([
-                nuclei_path, "-l", str(live_file), "-json-export", str(self.output_dir / "scans" / "nuclei_results.json"),
-                "-silent", "-severity", "critical,high,medium,low",
-                "-timeout", "10", "-retries", "1"
-            ], timeout=600)
-
-            with open(self.output_dir / "scans" / "nuclei_results.txt", "w") as f:
-                f.write(out)
-
-            for line in out.splitlines():
-                try:
-                    rec = json.loads(line)
-                    sev = rec.get("info", {}).get("severity", "info").lower()
-                    self.findings.append({
-                        "type": rec.get("template-id", "unknown"),
-                        "url": rec.get("matched-at", ""),
-                        "parameter": "",
-                        "severity": sev,
-                        "tool": "nuclei",
-                        "detail": rec.get("info", {}).get("name", "")
-                    })
-                    if sev in self.stats["vulnerabilities"]:
-                        self.stats["vulnerabilities"][sev] += 1
-                    else:
-                        self.stats["vulnerabilities"]["info"] += 1
-                except:
-                    pass
-
-            console.print(f"  [dim]nuclei → {len(self.findings)} total vulnerabilities found[/dim]")
-
-    # ─── PHASE 5: Analysis ─────────────────────────────────────────────────────
-    def phase5_analysis(self):
-        console.print(Panel(
-            "[bold cyan]Analyzing & grouping findings...[/bold cyan]",
-            title="[bold cyan]📊 Phase 5 – Analysis Engine[/bold cyan]",
-            border_style="cyan"
-        ))
-
-        # Deduplicate findings
-        seen = set()
-        deduped = []
-        for f in self.findings:
-            key = (f["type"], f["url"], f["parameter"])
-            if key not in seen:
-                seen.add(key)
-                deduped.append(f)
-        self.findings = deduped
-
-        # Group by severity
-        grouped = {"critical": [], "high": [], "medium": [], "low": [], "info": []}
-        for finding in self.findings:
-            sev = finding.get("severity", "info")
-            grouped.setdefault(sev, []).append(finding)
-
-        analysis = {
-            "summary": self.stats,
-            "findings_by_severity": {k: len(v) for k, v in grouped.items()},
-            "total_findings": len(self.findings),
-            "grouped_findings": grouped
-        }
-
-        with open(self.output_dir / "processed" / "analysis.json", "w") as f:
-            json.dump(analysis, f, indent=2)
-
-        # Print summary table
-        table = Table(title="📊 Scan Summary", border_style="yellow")
-        table.add_column("Metric", style="bold cyan")
-        table.add_column("Count", style="bold white", justify="right")
-
-        table.add_row("Total Subdomains", str(self.stats["subdomains"]))
-        table.add_row("Live Hosts", str(self.stats["live_hosts"]))
-        table.add_row("Open Ports", str(self.stats["open_ports"]))
-        table.add_row("Critical Vulns", f"[red]{self.stats['vulnerabilities']['critical']}[/red]")
-        table.add_row("High Vulns", f"[orange1]{self.stats['vulnerabilities']['high']}[/orange1]")
-        table.add_row("Medium Vulns", f"[yellow]{self.stats['vulnerabilities']['medium']}[/yellow]")
-        table.add_row("Low Vulns", f"[blue]{self.stats['vulnerabilities']['low']}[/blue]")
-        table.add_row("Info", f"[dim]{self.stats['vulnerabilities']['info']}[/dim]")
-
-        console.print(table)
-        self.log("Analysis complete")
-
-    # ─── PHASE 6: HTML Report ──────────────────────────────────────────────────
-    def phase6_html_report(self):
-        console.print(Panel(
-            "[bold cyan]Generating HTML report...[/bold cyan]",
-            title="[bold cyan]📄 Phase 6 – HTML Report Generator[/bold cyan]",
-            border_style="cyan"
-        ))
-
-        template_str = HTML_TEMPLATE
-        template = jinja2.Template(template_str)
-
-        tool_versions = {}
-        for tool in ["nmap", "nuclei", "subfinder", "httpx", "katana", "dalfox"]:
-            out, _, _ = self.run_command([tool, "-version"], timeout=5)
-            if not out:
-                out, _, _ = self.run_command([tool, "--version"], timeout=5)
-            tool_versions[tool] = out.strip().split("\n")[0] if out else "N/A"
-
-        html = template.render(
-            target=self.target,
-            scan_date=self.start_time.strftime("%Y-%m-%d %H:%M:%S"),
-            stats=self.stats,
-            subdomains=self.all_subdomains[:100],
-            live_hosts=self.live_hosts[:100],
-            open_ports=self.open_ports[:100],
-            findings=self.findings,
-            tool_versions=tool_versions,
-            end_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        raw = self.outdir / "raw"
+        await asyncio.gather(
+            self._assetfinder(raw),
+            self._subfinder(raw),
+            self._amass(raw),
         )
 
-        report_path = self.output_dir / "reports" / "final_report.html"
-        with open(report_path, "w") as f:
-            f.write(html)
+        merged: set = set()
+        for fname in ["assetfinder.txt", "subfinder.txt", "amass.txt"]:
+            for line in read_lines(raw / fname):
+                d = url_to_domain(line).strip(".*")
+                if d and (d == self.target or d.endswith("." + self.target)):
+                    merged.add(d)
 
-        self.log(f"HTML report generated: {report_path}")
-        console.print(f"  [green]✅ Report saved: [bold]{report_path}[/bold][/green]")
-        return report_path
+        self.subdomains = sorted(merged)
+        out = self.p(1, "subdomains_all.txt")
+        write_lines(out, self.subdomains)
+        self.stats["subdomains"] = len(self.subdomains)
+        self.log(f"STEP1: {len(self.subdomains)} unique subdomains")
+        ok(f"{len(self.subdomains)} unique subdomains  →  [bold]{out.name}[/bold]")
 
-    # ─── MAIN PIPELINE ─────────────────────────────────────────────────────────
+    async def _assetfinder(self, raw: Path):
+        with console.status("  [dim]assetfinder...[/dim]"):
+            out, err, rc = run_cmd([find_tool("assetfinder"), "--subs-only", self.target])
+            (raw / "assetfinder.txt").write_text(out)
+            info(f"assetfinder  → {len(out.splitlines())} lines  (raw/assetfinder.txt)")
+            self.log(f"assetfinder rc={rc} err={err[:60]}")
+
+    async def _subfinder(self, raw: Path):
+        with console.status("  [dim]subfinder...[/dim]"):
+            f = raw / "subfinder.txt"
+            # subfinder -d target -o file -silent
+            out, err, rc = run_cmd([find_tool("subfinder"), "-d", self.target, "-o", str(f), "-silent"])
+            if not f.exists() or f.stat().st_size == 0:
+                f.write_text(out)
+            info(f"subfinder    → {len(read_lines(f))} lines  (raw/subfinder.txt)")
+            self.log(f"subfinder rc={rc} err={err[:60]}")
+
+    async def _amass(self, raw: Path):
+        with console.status("  [dim]amass (passive)...[/dim]"):
+            f = raw / "amass.txt"
+            # amass enum -passive -d target -o file
+            out, err, rc = run_cmd(
+                ["amass", "enum", "-passive", "-d", self.target, "-o", str(f)],
+                timeout=240,
+            )
+            if not f.exists() or f.stat().st_size == 0:
+                f.write_text(out)
+            info(f"amass        → {len(read_lines(f))} lines  (raw/amass.txt)")
+            self.log(f"amass rc={rc} err={err[:60]}")
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # STEP 2 — Live Host Detection
+    # INPUT  : 01_subdomains_all.txt   (domain format)
+    # OUTPUT : 02_live_hosts_urls.txt  (URL format)
+    #          02_live_hosts_info.json
+    # ══════════════════════════════════════════════════════════════════════════
+    def step02_live_hosts(self):
+        step_banner(2, "LIVE HOST DETECTION",
+                    "httpx ← 01_subdomains_all.txt  →  02_live_hosts_urls.txt  +  02_live_hosts_info.json")
+
+        in_f = self.p(1, "subdomains_all.txt")
+        if not in_f.exists() or in_f.stat().st_size == 0:
+            warn("01_subdomains_all.txt is empty. Skipping httpx.")
+            return
+
+        httpx = find_tool("httpx")
+        info(f"Using: {httpx}")
+
+        # httpx v1.8.x exact flags:
+        # -l list  -sc status-code  -title  -server  -ct content-type
+        # -json    -silent  -timeout 10  -threads 50  -retries 1
+        out, err, rc = run_cmd([
+            httpx,
+            "-l",       str(in_f),
+            "-sc",               # status code
+            "-title",            # page title
+            "-server",           # server header
+            "-ct",               # content-type
+            "-json",             # JSON per line
+            "-silent",
+            "-timeout", "10",
+            "-threads", "50",
+            "-retries", "1",
+        ], timeout=900)
+
+        self.log(f"httpx rc={rc} stderr={err[:100]}")
+
+        urls, records = [], []
+        for line in out.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                r = json.loads(line)
+                url    = r.get("url", "")
+                status = r.get("status-code", r.get("status_code", 0))
+                server = r.get("webserver", r.get("server", ""))
+                ct     = r.get("content-type", r.get("content_type", ""))
+                title  = r.get("title", "")
+                if url:
+                    urls.append(url)
+                    records.append({"url": url, "status": status,
+                                    "server": server, "content_type": ct, "title": title})
+            except json.JSONDecodeError:
+                if line.startswith("http"):
+                    urls.append(line.split()[0])
+
+        # Fallback: plain output mode if JSON gave nothing
+        if not urls:
+            warn("JSON mode returned 0 results. Retrying in plain mode...")
+            out2, _, _ = run_cmd([
+                httpx, "-l", str(in_f),
+                "-sc", "-title", "-silent",
+                "-timeout", "10", "-threads", "50",
+            ], timeout=900)
+            for line in out2.splitlines():
+                line = line.strip()
+                if not line or "http" not in line:
+                    continue
+                parts = line.split()
+                url = parts[0]
+                try:
+                    status = int(parts[1].strip("[]"))
+                except (IndexError, ValueError):
+                    status = 0
+                urls.append(url)
+                records.append({"url": url, "status": status,
+                                "server": "", "content_type": "", "title": ""})
+
+        self.live_urls = urls
+        self.live_info = records
+        write_lines(self.p(2, "live_hosts_urls.txt"), urls)
+        self.p(2, "live_hosts_info.json").write_text(json.dumps(records, indent=2))
+        self.stats["live_hosts"] = len(urls)
+        self.log(f"STEP2: {len(urls)} live hosts")
+        ok(f"{len(urls)} live hosts  →  [bold]02_live_hosts_urls.txt[/bold]  +  02_live_hosts_info.json")
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # STEP 3 — Strip URLs → Clean Domains  (nmap can't take https://)
+    # INPUT  : 02_live_hosts_urls.txt
+    # OUTPUT : 03_live_domains_clean.txt   ← nmap input
+    # ══════════════════════════════════════════════════════════════════════════
+    def step03_clean_domains(self):
+        step_banner(3, "STRIP URLs  →  CLEAN DOMAINS  (nmap input)",
+                    "02_live_hosts_urls.txt  →  03_live_domains_clean.txt")
+
+        urls = read_lines(self.p(2, "live_hosts_urls.txt"))
+        domains = sorted(set(url_to_domain(u) for u in urls if u))
+        self.live_domains = domains
+        write_lines(self.p(3, "live_domains_clean.txt"), domains)
+        self.log(f"STEP3: {len(domains)} clean domains")
+        ok(f"{len(domains)} clean domains  →  [bold]03_live_domains_clean.txt[/bold]")
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # STEP 4 — Port Scanning
+    # INPUT  : 03_live_domains_clean.txt  (domain format, NO https://)
+    # OUTPUT : 04_open_ports.txt  |  04_open_ports.json
+    # ══════════════════════════════════════════════════════════════════════════
+    def step04_ports(self):
+        step_banner(4, "PORT SCANNING",
+                    "naabu/nmap ← 03_live_domains_clean.txt  →  04_open_ports.txt  +  04_open_ports.json")
+
+        in_f = self.p(3, "live_domains_clean.txt")
+        if not in_f.exists() or in_f.stat().st_size == 0:
+            warn("03_live_domains_clean.txt is empty. Skipping port scan.")
+            return
+
+        records = []
+
+        if tool_exists("naabu"):
+            info(f"Using naabu: {find_tool('naabu')}")
+            # naabu -list domains.txt -json -silent -top-ports 1000
+            out, err, rc = run_cmd([
+                find_tool("naabu"),
+                "-list",      str(in_f),
+                "-json",
+                "-silent",
+                "-top-ports", "1000",
+            ], timeout=600)
+            self.log(f"naabu rc={rc} err={err[:80]}")
+            for line in out.splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    r = json.loads(line)
+                    # naabu JSON: {"ip":"1.2.3.4","port":80,"host":"sub.example.com"}
+                    records.append({
+                        "host": r.get("host", r.get("ip", "")),
+                        "ip":   r.get("ip", ""),
+                        "port": str(r.get("port", "")),
+                        "tool": "naabu",
+                    })
+                except json.JSONDecodeError:
+                    pass
+        else:
+            info("naabu not found, using nmap.")
+            # nmap -iL domains.txt --top-ports 1000 --open -T4 -oN file
+            nmap_raw = self.outdir / "raw" / "nmap_raw.txt"
+            out, err, rc = run_cmd([
+                "nmap", "-iL", str(in_f),
+                "--top-ports", "1000",
+                "--open", "-T4",
+                "-oN", str(nmap_raw),
+            ], timeout=900)
+            self.log(f"nmap rc={rc} err={err[:80]}")
+            current_host = ""
+            for line in out.splitlines():
+                line = line.strip()
+                if line.startswith("Nmap scan report for"):
+                    # "Nmap scan report for sub.example.com (1.2.3.4)"
+                    parts = line.split()
+                    current_host = parts[-1].strip("()")
+                elif "/tcp" in line or "/udp" in line:
+                    p = line.split()
+                    if len(p) >= 2 and p[1] == "open":
+                        port = p[0].split("/")[0]
+                        records.append({
+                            "host": current_host,
+                            "ip":   current_host,
+                            "port": port,
+                            "tool": "nmap",
+                        })
+
+        write_lines(self.p(4, "open_ports.txt"),
+                    [f"{r['host']}:{r['port']}" for r in records])
+        self.p(4, "open_ports.json").write_text(json.dumps(records, indent=2))
+        self.open_ports = records
+        self.stats["open_ports"] = len(records)
+        self.log(f"STEP4: {len(records)} open ports")
+        ok(f"{len(records)} open ports  →  [bold]04_open_ports.txt[/bold]  +  04_open_ports.json")
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # STEP 5 — URL Crawling (katana)
+    # INPUT  : 02_live_hosts_urls.txt
+    # OUTPUT : 05_crawled_urls.txt
+    # ══════════════════════════════════════════════════════════════════════════
+    def step05_katana(self):
+        step_banner(5, "URL CRAWLING  —  katana",
+                    "katana ← 02_live_hosts_urls.txt  →  05_crawled_urls.txt")
+
+        in_f  = self.p(2, "live_hosts_urls.txt")
+        out_f = self.p(5, "crawled_urls.txt")
+
+        if not in_f.exists() or in_f.stat().st_size == 0:
+            warn("02_live_hosts_urls.txt is empty. Skipping katana.")
+            write_lines(out_f, [])
+            return
+
+        katana = find_tool("katana")
+        info(f"Using: {katana}")
+
+        # katana -list file -o out -silent -d 3 -jc -timeout 10 -retry 1
+        out, err, rc = run_cmd([
+            katana,
+            "-list",    str(in_f),
+            "-o",       str(out_f),
+            "-silent",
+            "-d",       "3",
+            "-jc",               # JS file crawling
+            "-timeout", "10",
+            "-retry",   "1",
+        ], timeout=600)
+
+        # If -o didn't write (older katana), use stdout
+        if not out_f.exists() or out_f.stat().st_size == 0:
+            out_f.write_text(out)
+
+        self.crawled_urls = read_lines(out_f)
+        self.stats["crawled_urls"] = len(self.crawled_urls)
+        self.log(f"STEP5: {len(self.crawled_urls)} crawled URLs rc={rc}")
+        ok(f"{len(self.crawled_urls)} URLs crawled  →  [bold]05_crawled_urls.txt[/bold]")
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # STEP 6 — Directory Fuzzing (ffuf)
+    # INPUT  : 02_live_hosts_urls.txt  (first 10 hosts)
+    # OUTPUT : 06_fuzz_results.txt  |  06_fuzz_results.json
+    # ══════════════════════════════════════════════════════════════════════════
+    def step06_fuzz(self):
+        step_banner(6, "DIRECTORY FUZZING  —  ffuf",
+                    "ffuf ← 02_live_hosts_urls.txt + wordlist  →  06_fuzz_results.txt")
+
+        if not tool_exists("ffuf"):
+            warn("ffuf not found. Skipping.")
+            return
+
+        wordlist = find_wordlist()
+        if not wordlist:
+            warn("No wordlist found. Install: sudo apt install wordlists seclists")
+            return
+
+        in_f    = self.p(2, "live_hosts_urls.txt")
+        out_txt = self.p(6, "fuzz_results.txt")
+        out_json= self.p(6, "fuzz_results.json")
+        raw_dir = self.outdir / "raw_fuzz"
+
+        urls = read_lines(in_f)
+        if not urls:
+            warn("No URLs to fuzz.")
+            return
+
+        ffuf      = find_tool("ffuf")
+        all_hits  = []
+        info(f"Using: {ffuf}  |  Wordlist: {wordlist}")
+        info(f"Fuzzing {min(10, len(urls))} hosts...")
+
+        for url in urls[:10]:
+            base      = url.rstrip("/")
+            safe_name = re.sub(r"[^\w]", "_", base)[:50]
+            j_out     = raw_dir / f"{safe_name}.json"
+
+            # ffuf -u URL/FUZZ -w wordlist -o out.json -of json
+            #      -mc 200,201,204,301,302,307,401,403  -t 50 -timeout 10 -s
+            out, err, rc = run_cmd([
+                ffuf,
+                "-u",  f"{base}/FUZZ",
+                "-w",  wordlist,
+                "-o",  str(j_out),
+                "-of", "json",
+                "-mc", "200,201,204,301,302,307,401,403",
+                "-t",  "50",
+                "-timeout", "10",
+                "-s",       # silent
+            ], timeout=180)
+            self.log(f"ffuf {base}: rc={rc} err={err[:60]}")
+
+            if j_out.exists():
+                try:
+                    data = json.loads(j_out.read_text())
+                    for r in data.get("results", []):
+                        all_hits.append({
+                            "url":    r.get("url", ""),
+                            "status": r.get("status", 0),
+                            "length": r.get("length", 0),
+                        })
+                except Exception:
+                    pass
+
+        out_json.write_text(json.dumps(all_hits, indent=2))
+        write_lines(out_txt, [f"{h['status']}  {h['url']}" for h in all_hits])
+        self.stats["fuzz_hits"] = len(all_hits)
+        self.log(f"STEP6: {len(all_hits)} fuzz hits")
+        ok(f"{len(all_hits)} directories found  →  [bold]06_fuzz_results.txt[/bold]  +  06_fuzz_results.json")
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # STEP 7 — XSS Scanning (dalfox)
+    # INPUT  : 05_crawled_urls.txt
+    # OUTPUT : 07_xss_findings.txt  |  07_xss_findings.json
+    # ══════════════════════════════════════════════════════════════════════════
+    def step07_dalfox(self):
+        step_banner(7, "XSS SCANNING  —  dalfox",
+                    "dalfox ← 05_crawled_urls.txt  →  07_xss_findings.txt  +  07_xss_findings.json")
+
+        in_f    = self.p(5, "crawled_urls.txt")
+        out_txt = self.p(7, "xss_findings.txt")
+        out_json= self.p(7, "xss_findings.json")
+
+        if not in_f.exists() or in_f.stat().st_size == 0:
+            warn("05_crawled_urls.txt is empty. Skipping dalfox.")
+            out_json.write_text("[]")
+            write_lines(out_txt, [])
+            return
+
+        dalfox = find_tool("dalfox")
+        info(f"Using: {dalfox}")
+
+        # dalfox file <input> -o <out> --silence --format json --timeout 10 --mass
+        out, err, rc = run_cmd([
+            dalfox,
+            "file",       str(in_f),
+            "-o",         str(out_txt),
+            "--silence",
+            "--format",   "json",
+            "--timeout",  "10",
+            "--mass",
+        ], timeout=600)
+        self.log(f"dalfox rc={rc} err={err[:100]}")
+
+        raw_text = ""
+        if out_txt.exists():
+            raw_text = out_txt.read_text(errors="ignore")
+        raw_text += "\n" + out
+
+        hits = []
+        for line in raw_text.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                r = json.loads(line)
+                hits.append({
+                    "type":      "XSS",
+                    "url":       r.get("data", {}).get("url", r.get("url", "")),
+                    "parameter": r.get("data", {}).get("param", r.get("param", "")),
+                    "payload":   r.get("data", {}).get("payload", ""),
+                    "severity":  "high",
+                    "tool":      "dalfox",
+                    "detail":    "",
+                })
+            except json.JSONDecodeError:
+                if "[POC]" in line or "XSS" in line.upper():
+                    hits.append({
+                        "type": "XSS", "url": line,
+                        "parameter": "", "payload": "",
+                        "severity": "high", "tool": "dalfox", "detail": "",
+                    })
+
+        out_json.write_text(json.dumps(hits, indent=2))
+        self.findings.extend(hits)
+        self.stats["vulns"]["high"] += len(hits)
+        self.log(f"STEP7: {len(hits)} XSS findings")
+        ok(f"{len(hits)} XSS findings  →  [bold]07_xss_findings.txt[/bold]  +  07_xss_findings.json")
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # STEP 8 — Nuclei Template Scan
+    # INPUT  : 02_live_hosts_urls.txt
+    # OUTPUT : 08_nuclei_findings.txt  |  08_nuclei_findings.json
+    # ══════════════════════════════════════════════════════════════════════════
+    def step08_nuclei(self):
+        step_banner(8, "VULNERABILITY SCAN  —  nuclei",
+                    "nuclei ← 02_live_hosts_urls.txt  →  08_nuclei_findings.txt  +  08_nuclei_findings.json")
+
+        in_f    = self.p(2, "live_hosts_urls.txt")
+        out_txt = self.p(8, "nuclei_findings.txt")
+        out_json= self.p(8, "nuclei_findings.json")
+
+        if not in_f.exists() or in_f.stat().st_size == 0:
+            warn("02_live_hosts_urls.txt is empty. Skipping nuclei.")
+            out_json.write_text("[]")
+            return
+
+        nuclei = find_tool("nuclei")
+        info(f"Using: {nuclei}")
+
+        with console.status("  [dim]Updating nuclei templates...[/dim]"):
+            run_cmd([nuclei, "-update-templates", "-silent"], timeout=120)
+
+        # nuclei -l file -o out -j -silent -s critical,high,medium,low -timeout 10 -retries 1 -rate-limit 100
+        out, err, rc = run_cmd([
+            nuclei,
+            "-l",          str(in_f),
+            "-o",          str(out_txt),
+            "-j",                         # JSON output
+            "-silent",
+            "-s",          "critical,high,medium,low",
+            "-timeout",    "10",
+            "-retries",    "1",
+            "-rate-limit", "100",
+        ], timeout=1800)
+        self.log(f"nuclei rc={rc} err={err[:100]}")
+
+        raw_text = ""
+        if out_txt.exists():
+            raw_text = out_txt.read_text(errors="ignore")
+        raw_text += "\n" + out
+
+        hits = []
+        for line in raw_text.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                r   = json.loads(line)
+                inf = r.get("info", {})
+                sev = inf.get("severity", "info").lower()
+                hits.append({
+                    "type":      inf.get("name", r.get("template-id", "unknown")),
+                    "url":       r.get("matched-at", r.get("host", "")),
+                    "parameter": "",
+                    "payload":   str(r.get("extracted-results", "")),
+                    "severity":  sev,
+                    "tool":      "nuclei",
+                    "detail":    r.get("template-id", ""),
+                })
+                bucket = sev if sev in self.stats["vulns"] else "info"
+                self.stats["vulns"][bucket] += 1
+            except json.JSONDecodeError:
+                pass
+
+        out_json.write_text(json.dumps(hits, indent=2))
+        self.findings.extend(hits)
+        self.log(f"STEP8: {len(hits)} nuclei findings")
+        ok(f"{len(hits)} findings  →  [bold]08_nuclei_findings.txt[/bold]  +  08_nuclei_findings.json")
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # STEP 9 — Merge & Dedupe All Findings
+    # INPUT  : 07_xss_findings.json  +  08_nuclei_findings.json
+    # OUTPUT : 09_all_findings.json
+    # ══════════════════════════════════════════════════════════════════════════
+    def step09_merge(self):
+        step_banner(9, "MERGE & DEDUPE",
+                    "07_xss + 08_nuclei  →  09_all_findings.json")
+
+        seen, unique = set(), []
+        for f in self.findings:
+            key = (f.get("type", ""), f.get("url", ""), f.get("parameter", ""))
+            if key not in seen:
+                seen.add(key)
+                unique.append(f)
+
+        self.findings = unique
+        self.p(9, "all_findings.json").write_text(json.dumps(unique, indent=2))
+
+        # Recount severity stats
+        for k in self.stats["vulns"]:
+            self.stats["vulns"][k] = 0
+        for f in unique:
+            b = f.get("severity", "info")
+            if b in self.stats["vulns"]:
+                self.stats["vulns"][b] += 1
+            else:
+                self.stats["vulns"]["info"] += 1
+
+        self.log(f"STEP9: {len(unique)} unique findings")
+        ok(f"{len(unique)} unique findings  →  [bold]09_all_findings.json[/bold]")
+
+        t = Table(title="\U0001f4ca Scan Summary", border_style="yellow", header_style="bold yellow")
+        t.add_column("Metric",  style="cyan")
+        t.add_column("Count",   justify="right", style="bold white")
+        t.add_row("Subdomains",   str(self.stats["subdomains"]))
+        t.add_row("Live Hosts",   str(self.stats["live_hosts"]))
+        t.add_row("Open Ports",   str(self.stats["open_ports"]))
+        t.add_row("Crawled URLs", str(self.stats["crawled_urls"]))
+        t.add_row("Fuzz Hits",    str(self.stats["fuzz_hits"]))
+        t.add_row("[red]Critical[/red]",  f"[red]{self.stats['vulns']['critical']}[/red]")
+        t.add_row("[orange1]High[/orange1]",    f"[orange1]{self.stats['vulns']['high']}[/orange1]")
+        t.add_row("[yellow]Medium[/yellow]",  f"[yellow]{self.stats['vulns']['medium']}[/yellow]")
+        t.add_row("[blue]Low[/blue]",       f"[blue]{self.stats['vulns']['low']}[/blue]")
+        t.add_row("[dim]Info[/dim]",         f"[dim]{self.stats['vulns']['info']}[/dim]")
+        console.print(t)
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # STEP 10 — HTML Report
+    # OUTPUT : 10_final_report.html
+    # ══════════════════════════════════════════════════════════════════════════
+    def step10_report(self) -> Path:
+        step_banner(10, "HTML REPORT GENERATOR",
+                    "Jinja2 + Bootstrap  →  10_final_report.html")
+
+        tv = {}
+        for t in ["httpx", "nuclei", "subfinder", "katana", "dalfox", "ffuf", "nmap", "naabu"]:
+            p = find_tool(t)
+            o1, _, _ = run_cmd([p, "-version"],  timeout=5)
+            o2, _, _ = run_cmd([p, "--version"], timeout=5)
+            tv[t] = ((o1 or o2 or "").strip().split("\n")[0])[:60] or "N/A"
+
+        html = jinja2.Template(HTML_TEMPLATE).render(
+            target        = self.target,
+            scan_date     = self.start_ts.strftime("%Y-%m-%d %H:%M:%S"),
+            end_time      = datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            stats         = self.stats,
+            subdomains    = self.subdomains,
+            live_info     = self.live_info,
+            open_ports    = self.open_ports,
+            crawled_count = self.stats["crawled_urls"],
+            findings      = self.findings,
+            tool_versions = tv,
+        )
+        out = self.p(10, "final_report.html")
+        out.write_text(html)
+        self.log(f"STEP10: report saved → {out.name}")
+        ok(f"Report  →  [bold green]{out}[/bold green]")
+        return out
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # MAIN
+    # ══════════════════════════════════════════════════════════════════════════
     async def run(self):
         console.print(BANNER)
         console.print(Panel(
-            f"[bold]Target:[/bold] [cyan]{self.target}[/cyan]\n"
-            f"[bold]Output:[/bold] [cyan]{self.output_dir}[/cyan]\n"
-            f"[bold]Started:[/bold] [cyan]{self.start_time.strftime('%Y-%m-%d %H:%M:%S')}[/cyan]",
-            title="[bold yellow]🦇 ReconFusion M7 – Mission Briefing[/bold yellow]",
-            border_style="yellow"
+            f"[bold]Target :[/bold] [cyan]{self.target}[/cyan]\n"
+            f"[bold]Output :[/bold] [cyan]{self.outdir}[/cyan]\n"
+            f"[bold]Started:[/bold] [cyan]{self.start_ts.strftime('%Y-%m-%d %H:%M:%S')}[/cyan]",
+            title="[bold yellow]\U0001f987 ReconFusion M7 \u2013 Mission Briefing[/bold yellow]",
+            border_style="yellow",
         ))
 
-        # Phase 0
-        if not self.phase0_scope_validation():
+        if not self.phase_auth():
             return
+        self.phase_tools()
 
-        # Auto-install tools
-        self.auto_install_tools()
+        await self.step01_subdomains()   # raw → 01_subdomains_all.txt
+        self.step02_live_hosts()         # 01  → 02_live_hosts_urls.txt + .json
+        self.step03_clean_domains()      # 02  → 03_live_domains_clean.txt
+        self.step04_ports()              # 03  → 04_open_ports.txt + .json
+        self.step05_katana()             # 02  → 05_crawled_urls.txt
+        self.step06_fuzz()               # 02  → 06_fuzz_results.txt + .json
+        self.step07_dalfox()             # 05  → 07_xss_findings.txt + .json
+        self.step08_nuclei()             # 02  → 08_nuclei_findings.txt + .json
+        self.step09_merge()              # 07+08 → 09_all_findings.json
+        report = self.step10_report()   # all → 10_final_report.html
 
-        # Phase 1
-        await self.phase1_subdomain_enum()
-        # Phase 2
-        self.phase2_live_hosts()
-        # Phase 3
-        self.phase3_port_scan()
-        # Phase 4
-        self.phase4_advanced_scan()
-        # Phase 5
-        self.phase5_analysis()
-        # Phase 6
-        report_path = self.phase6_html_report()
-
-        duration = (datetime.now() - self.start_time).seconds
+        dur = int((datetime.now() - self.start_ts).total_seconds())
         console.print(Panel(
-            f"[bold green]🎯 Mission Complete![/bold green]\n\n"
-            f"[bold]Duration:[/bold] {duration}s\n"
-            f"[bold]Report:[/bold] [cyan]{report_path}[/cyan]\n"
-            f"[bold]Output:[/bold] [cyan]{self.output_dir}[/cyan]",
-            title="[bold yellow]🦇 ReconFusion – Mission Complete[/bold yellow]",
-            border_style="green"
+            f"[bold green]\U0001f3af Mission Complete![/bold green]\n\n"
+            f"[bold]Duration:[/bold] {dur}s\n"
+            f"[bold]Report  :[/bold] [cyan]{report}[/cyan]\n"
+            f"[bold]Output  :[/bold] [cyan]{self.outdir}[/cyan]",
+            title="[bold yellow]\U0001f987 ReconFusion \u2013 Mission Complete[/bold yellow]",
+            border_style="green",
         ))
 
 
-HTML_TEMPLATE = '''<!DOCTYPE html>
+# ── HTML Template ──────────────────────────────────────────────────────────────
+HTML_TEMPLATE = r"""<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>ReconFusion Report – {{ target }}</title>
-<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ReconFusion M7 \u2013 {{ target }}</title>
+<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
 <style>
-  :root {
-    --batman-yellow: #FFD700;
-    --batman-dark: #0a0a0a;
-    --batman-gray: #1a1a1a;
-    --batman-light: #2a2a2a;
-    --critical: #dc3545;
-    --high: #fd7e14;
-    --medium: #ffc107;
-    --low: #0d6efd;
-    --info: #6c757d;
-  }
-  body { background: var(--batman-dark); color: #e0e0e0; font-family: 'Courier New', monospace; }
-  .navbar { background: #111 !important; border-bottom: 2px solid var(--batman-yellow); }
-  .navbar-brand { color: var(--batman-yellow) !important; font-weight: bold; font-size: 1.5rem; letter-spacing: 2px; }
-  .card { background: var(--batman-gray); border: 1px solid #333; }
-  .card-header { background: var(--batman-light); border-bottom: 1px solid var(--batman-yellow); color: var(--batman-yellow); font-weight: bold; }
-  .table { color: #e0e0e0; }
-  .table-dark { background: var(--batman-gray); }
-  .badge-critical { background: var(--critical); }
-  .badge-high { background: var(--high); }
-  .badge-medium { background: var(--medium); color: #000; }
-  .badge-low { background: var(--low); }
-  .badge-info { background: var(--info); }
-  .stat-card { border-top: 3px solid var(--batman-yellow); text-align: center; padding: 20px; }
-  .stat-num { font-size: 2.5rem; font-weight: bold; color: var(--batman-yellow); }
-  .stat-label { color: #aaa; font-size: 0.85rem; text-transform: uppercase; letter-spacing: 1px; }
-  .section-title { color: var(--batman-yellow); border-bottom: 1px solid var(--batman-yellow); padding-bottom: 8px; margin-bottom: 20px; }
-  .accordion-button { background: var(--batman-light) !important; color: #e0e0e0 !important; }
-  .accordion-body { background: var(--batman-gray); }
-  .accordion-item { border: 1px solid #333; }
-  .bat-logo { font-size: 3rem; }
-  footer { border-top: 2px solid var(--batman-yellow); padding: 20px 0; margin-top: 40px; }
-  .severity-critical { color: var(--critical); font-weight: bold; }
-  .severity-high { color: var(--high); font-weight: bold; }
-  .severity-medium { color: var(--medium); font-weight: bold; }
-  .severity-low { color: var(--low); }
-  .severity-info { color: var(--info); }
+:root{--y:#FFD700;--d:#07070a;--g:#111118;--l:#1a1a24;}
+body{background:var(--d);color:#ccc;font-family:'Courier New',monospace;}
+.nb{background:#0a0a0e!important;border-bottom:2px solid var(--y);}
+.nbb{color:var(--y)!important;font-weight:700;letter-spacing:3px;}
+.card{background:var(--g);border:1px solid #222;}
+.ch{background:var(--l)!important;border-bottom:1px solid var(--y);color:var(--y);font-weight:700;}
+.table{color:#ccc;}.td{background:var(--g);}
+.sc{border-top:3px solid var(--y);text-align:center;padding:16px;}
+.sn{font-size:2rem;font-weight:900;color:var(--y);}
+.sl{font-size:.7rem;color:#666;text-transform:uppercase;letter-spacing:2px;}
+.sc.cr{border-top-color:#dc3545;}.sc.cr .sn{color:#dc3545;}
+.sc.hi{border-top-color:#fd7e14;}.sc.hi .sn{color:#fd7e14;}
+.ab{background:var(--l)!important;color:#ddd!important;}
+.abo{background:var(--g)!important;}
+.ai{border:1px solid #222!important;}
+footer{border-top:2px solid var(--y);padding:20px;text-align:center;margin-top:40px;}
+code{color:var(--y);}
 </style>
 </head>
 <body>
-<nav class="navbar navbar-dark sticky-top">
-  <div class="container">
-    <span class="navbar-brand">🦇 ReconFusion M7 – Security Report</span>
-    <span class="text-muted small">Produced by MilkyWay Intelligence</span>
-  </div>
-</nav>
-
+<nav class="navbar nb sticky-top"><div class="container">
+<span class="nbb">\U0001f987 ReconFusion M7</span>
+<span class="text-muted small">MilkyWay Intelligence \u2014 {{ scan_date }}</span>
+</div></nav>
 <div class="container py-4">
 
-  <!-- Executive Summary -->
-  <div class="card mb-4">
-    <div class="card-header">📋 Executive Summary</div>
-    <div class="card-body">
-      <div class="row">
-        <div class="col-md-6">
-          <p><strong>Target:</strong> <code class="text-warning">{{ target }}</code></p>
-          <p><strong>Scan Date:</strong> {{ scan_date }}</p>
-          <p><strong>Completed:</strong> {{ end_time }}</p>
-        </div>
-        <div class="col-md-6">
-          <p><strong>Status:</strong> <span class="badge bg-success">Completed</span></p>
-          <p><strong>Authorization:</strong> <span class="badge bg-warning text-dark">Confirmed</span></p>
-        </div>
-      </div>
-    </div>
-  </div>
-
-  <!-- Stats Cards -->
-  <div class="row mb-4">
-    <div class="col-md-3"><div class="card stat-card"><div class="stat-num">{{ stats.subdomains }}</div><div class="stat-label">Subdomains</div></div></div>
-    <div class="col-md-3"><div class="card stat-card"><div class="stat-num">{{ stats.live_hosts }}</div><div class="stat-label">Live Hosts</div></div></div>
-    <div class="col-md-3"><div class="card stat-card"><div class="stat-num">{{ stats.open_ports }}</div><div class="stat-label">Open Ports</div></div></div>
-    <div class="col-md-3"><div class="card stat-card">
-      <div class="stat-num text-danger">{{ stats.vulnerabilities.critical }}</div>
-      <div class="stat-label">Critical Vulns</div>
-    </div></div>
-  </div>
-
-  <!-- Vulnerability Breakdown -->
-  <div class="card mb-4">
-    <div class="card-header">🔴 Vulnerability Breakdown</div>
-    <div class="card-body">
-      <table class="table table-dark">
-        <thead><tr><th>Severity</th><th>Count</th><th>Bar</th></tr></thead>
-        <tbody>
-          <tr><td><span class="severity-critical">● Critical</span></td><td>{{ stats.vulnerabilities.critical }}</td><td><div class="progress" style="height:8px"><div class="progress-bar bg-danger" style="width:{{ [stats.vulnerabilities.critical * 10, 100]|min }}%"></div></div></td></tr>
-          <tr><td><span class="severity-high">● High</span></td><td>{{ stats.vulnerabilities.high }}</td><td><div class="progress" style="height:8px"><div class="progress-bar bg-warning" style="width:{{ [stats.vulnerabilities.high * 10, 100]|min }}%"></div></div></td></tr>
-          <tr><td><span class="severity-medium">● Medium</span></td><td>{{ stats.vulnerabilities.medium }}</td><td><div class="progress" style="height:8px"><div class="progress-bar bg-warning" style="width:{{ [stats.vulnerabilities.medium * 10, 100]|min }}%"></div></div></td></tr>
-          <tr><td><span class="severity-low">● Low</span></td><td>{{ stats.vulnerabilities.low }}</td><td><div class="progress" style="height:8px"><div class="progress-bar bg-primary" style="width:{{ [stats.vulnerabilities.low * 10, 100]|min }}%"></div></div></td></tr>
-          <tr><td><span class="severity-info">● Info</span></td><td>{{ stats.vulnerabilities.info }}</td><td><div class="progress" style="height:8px"><div class="progress-bar bg-secondary" style="width:{{ [stats.vulnerabilities.info * 5, 100]|min }}%"></div></div></td></tr>
-        </tbody>
-      </table>
-    </div>
-  </div>
-
-  <!-- Live Hosts -->
-  <div class="card mb-4">
-    <div class="card-header">🌍 Live Hosts ({{ live_hosts|length }})</div>
-    <div class="card-body p-0">
-      <div class="table-responsive">
-        <table class="table table-dark table-hover mb-0">
-          <thead><tr><th>URL</th><th>Status</th><th>Server</th><th>Title</th></tr></thead>
-          <tbody>
-            {% for h in live_hosts %}
-            <tr>
-              <td><a href="{{ h.url }}" target="_blank" class="text-warning">{{ h.url }}</a></td>
-              <td><span class="badge {% if h.status == 200 %}bg-success{% elif h.status == 403 %}bg-warning text-dark{% else %}bg-secondary{% endif %}">{{ h.status }}</span></td>
-              <td><code>{{ h.server or '-' }}</code></td>
-              <td>{{ h.title or '-' }}</td>
-            </tr>
-            {% else %}
-            <tr><td colspan="4" class="text-center text-muted">No live hosts found</td></tr>
-            {% endfor %}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  </div>
-
-  <!-- Open Ports -->
-  <div class="card mb-4">
-    <div class="card-header">🔎 Open Ports ({{ open_ports|length }})</div>
-    <div class="card-body p-0">
-      <table class="table table-dark table-hover mb-0">
-        <thead><tr><th>IP</th><th>Port</th><th>Host</th></tr></thead>
-        <tbody>
-          {% for p in open_ports %}
-          <tr><td>{{ p.ip }}</td><td><span class="badge bg-info text-dark">{{ p.port }}</span></td><td>{{ p.host }}</td></tr>
-          {% else %}
-          <tr><td colspan="3" class="text-center text-muted">No open ports found</td></tr>
-          {% endfor %}
-        </tbody>
-      </table>
-    </div>
-  </div>
-
-  <!-- Detailed Findings -->
-  <div class="card mb-4">
-    <div class="card-header">🧪 Detailed Findings ({{ findings|length }})</div>
-    <div class="card-body">
-      <div class="accordion" id="findingsAccordion">
-        {% for f in findings %}
-        <div class="accordion-item mb-2">
-          <h2 class="accordion-header">
-            <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#finding{{ loop.index }}">
-              <span class="badge me-2 {% if f.severity == 'critical' %}bg-danger{% elif f.severity == 'high' %}bg-warning text-dark{% elif f.severity == 'medium' %}bg-warning text-dark{% elif f.severity == 'low' %}bg-primary{% else %}bg-secondary{% endif %}">
-                {{ f.severity|upper }}
-              </span>
-              [{{ f.tool }}] {{ f.type }} – {{ f.url[:80] }}
-            </button>
-          </h2>
-          <div id="finding{{ loop.index }}" class="accordion-collapse collapse">
-            <div class="accordion-body">
-              <table class="table table-dark table-sm">
-                <tr><th>Type</th><td>{{ f.type }}</td></tr>
-                <tr><th>URL</th><td><a href="{{ f.url }}" class="text-warning">{{ f.url }}</a></td></tr>
-                <tr><th>Parameter</th><td>{{ f.parameter or '-' }}</td></tr>
-                <tr><th>Severity</th><td class="severity-{{ f.severity }}">{{ f.severity|upper }}</td></tr>
-                <tr><th>Tool</th><td>{{ f.tool }}</td></tr>
-                <tr><th>Detail</th><td><code>{{ f.detail }}</code></td></tr>
-              </table>
-            </div>
-          </div>
-        </div>
-        {% else %}
-        <p class="text-muted text-center">No vulnerabilities found</p>
-        {% endfor %}
-      </div>
-    </div>
-  </div>
-
-  <!-- Subdomains -->
-  <div class="card mb-4">
-    <div class="card-header">🌐 Discovered Subdomains ({{ subdomains|length }})</div>
-    <div class="card-body">
-      <div style="max-height: 300px; overflow-y: auto;">
-        {% for sub in subdomains %}
-        <code class="text-warning d-block small">{{ sub }}</code>
-        {% else %}
-        <p class="text-muted">No subdomains found</p>
-        {% endfor %}
-      </div>
-    </div>
-  </div>
-
-  <!-- Tool Versions -->
-  <div class="card mb-4">
-    <div class="card-header">⚙️ Tool Versions</div>
-    <div class="card-body">
-      <table class="table table-dark table-sm">
-        <thead><tr><th>Tool</th><th>Version Info</th></tr></thead>
-        <tbody>
-          {% for tool, ver in tool_versions.items() %}
-          <tr><td><strong>{{ tool }}</strong></td><td><code>{{ ver or 'N/A' }}</code></td></tr>
-          {% endfor %}
-        </tbody>
-      </table>
-    </div>
-  </div>
-
+<div class="row g-3 mb-4">
+<div class="col-6 col-md-3"><div class="card sc"><div class="sn">{{ stats.subdomains }}</div><div class="sl">Subdomains</div></div></div>
+<div class="col-6 col-md-3"><div class="card sc"><div class="sn">{{ stats.live_hosts }}</div><div class="sl">Live Hosts</div></div></div>
+<div class="col-6 col-md-3"><div class="card sc"><div class="sn">{{ stats.open_ports }}</div><div class="sl">Open Ports</div></div></div>
+<div class="col-6 col-md-3"><div class="card sc"><div class="sn">{{ stats.crawled_urls }}</div><div class="sl">Crawled URLs</div></div></div>
+<div class="col-6 col-md-3"><div class="card sc"><div class="sn">{{ stats.fuzz_hits }}</div><div class="sl">Fuzz Hits</div></div></div>
+<div class="col-6 col-md-3"><div class="card sc cr"><div class="sn">{{ stats.vulns.critical }}</div><div class="sl">Critical</div></div></div>
+<div class="col-6 col-md-3"><div class="card sc hi"><div class="sn">{{ stats.vulns.high }}</div><div class="sl">High</div></div></div>
+<div class="col-6 col-md-3"><div class="card sc"><div class="sn">{{ stats.vulns.medium }}</div><div class="sl">Medium</div></div></div>
 </div>
 
-<footer class="text-center text-muted">
-  <div class="container">
-    <span class="bat-logo">🦇</span>
-    <p class="mb-0 mt-2"><strong style="color: var(--batman-yellow)">ReconFusion M7</strong> – Produced by MilkyWay Intelligence</p>
-    <p class="small">For authorized security testing use only. Generated: {{ end_time }}</p>
-    <p class="small text-warning">⚠️ This report is confidential. Handle according to your organization's data classification policy.</p>
-  </div>
+<div class="card mb-4"><div class="card-header ch">\U0001f4cb Scope</div><div class="card-body">
+<p><b>Target:</b> <code>{{ target }}</code> &nbsp; <b>Start:</b> {{ scan_date }} &nbsp; <b>End:</b> {{ end_time }}</p>
+</div></div>
+
+<div class="card mb-4"><div class="card-header ch">\U0001f30d Live Hosts ({{ live_info|length }})</div>
+<div class="card-body p-0"><div class="table-responsive">
+<table class="table td table-hover mb-0 small">
+<thead><tr><th>URL</th><th>Status</th><th>Server</th><th>Title</th></tr></thead><tbody>
+{% for h in live_info %}
+<tr>
+<td><a href="{{ h.url }}" target="_blank" class="text-warning">{{ h.url }}</a></td>
+<td><span class="badge {% if h.status==200 %}bg-success{% elif h.status in [301,302,307] %}bg-warning text-dark{% elif h.status==403 %}bg-secondary{% else %}bg-dark border{% endif %}">{{ h.status }}</span></td>
+<td>{{ h.server or '-' }}</td><td>{{ h.title or '-' }}</td>
+</tr>
+{% else %}<tr><td colspan="4" class="text-center text-muted py-3">No live hosts found</td></tr>{% endfor %}
+</tbody></table></div></div></div>
+
+<div class="card mb-4"><div class="card-header ch">\U0001f50e Open Ports ({{ open_ports|length }})</div>
+<div class="card-body p-0"><div class="table-responsive">
+<table class="table td table-hover mb-0 small">
+<thead><tr><th>Host</th><th>IP</th><th>Port</th><th>Tool</th></tr></thead><tbody>
+{% for p in open_ports %}
+<tr><td>{{ p.host }}</td><td>{{ p.ip }}</td>
+<td><span class="badge bg-info text-dark">{{ p.port }}</span></td>
+<td>{{ p.tool }}</td></tr>
+{% else %}<tr><td colspan="4" class="text-center text-muted py-3">No open ports found</td></tr>{% endfor %}
+</tbody></table></div></div></div>
+
+<div class="card mb-4"><div class="card-header ch">\U0001f9ea Findings ({{ findings|length }})</div>
+<div class="card-body">
+<div class="accordion" id="va">
+{% for f in findings %}
+<div class="accordion-item ai mb-1">
+<h2 class="accordion-header">
+<button class="accordion-button ab collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#fi{{ loop.index }}">
+<span class="badge me-2 {% if f.severity=='critical' %}bg-danger{% elif f.severity=='high' %}bg-warning text-dark{% elif f.severity=='medium' %}bg-warning text-dark{% elif f.severity=='low' %}bg-primary{% else %}bg-secondary{% endif %}">
+{{ (f.severity or 'info')|upper }}</span>
+[{{ f.tool }}] {{ f.type }} \u2014 {{ (f.url or '')[:80] }}
+</button></h2>
+<div id="fi{{ loop.index }}" class="accordion-collapse collapse">
+<div class="accordion-body abo">
+<table class="table td table-sm small mb-0">
+<tr><th width="100">Type</th><td>{{ f.type }}</td></tr>
+<tr><th>URL</th><td><a href="{{ f.url }}" class="text-warning" target="_blank">{{ f.url }}</a></td></tr>
+<tr><th>Parameter</th><td>{{ f.parameter or '-' }}</td></tr>
+<tr><th>Severity</th><td>{{ (f.severity or 'info')|upper }}</td></tr>
+<tr><th>Tool</th><td>{{ f.tool }}</td></tr>
+<tr><th>Detail</th><td><code>{{ f.detail or f.payload or '-' }}</code></td></tr>
+</table></div></div></div>
+{% else %}<p class="text-muted text-center py-3">No vulnerabilities found</p>{% endfor %}
+</div></div></div>
+
+<div class="card mb-4"><div class="card-header ch">\U0001f310 Subdomains ({{ subdomains|length }})</div>
+<div class="card-body" style="max-height:220px;overflow-y:auto">
+{% for s in subdomains %}<code class="d-block small text-warning">{{ s }}</code>
+{% else %}<span class="text-muted">None</span>{% endfor %}
+</div></div>
+
+<div class="card mb-4"><div class="card-header ch">\u2699\ufe0f Tool Versions</div>
+<div class="card-body p-0"><table class="table td table-sm mb-0 small">
+<thead><tr><th>Tool</th><th>Version</th></tr></thead><tbody>
+{% for t,v in tool_versions.items() %}
+<tr><td><b>{{ t }}</b></td><td><code>{{ v or 'N/A' }}</code></td></tr>
+{% endfor %}
+</tbody></table></div></div>
+
+</div>
+<footer>
+<p style="color:var(--y);font-weight:700;">\U0001f987 ReconFusion M7</p>
+<p class="text-muted small">Produced by MilkyWay Intelligence \u2014 Authorized testing only \u2014 {{ end_time }}</p>
 </footer>
-
-<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
-</body>
-</html>
-'''
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+</body></html>
+"""
 
 
+# ── Entry point ────────────────────────────────────────────────────────────────
 def main():
-    parser = argparse.ArgumentParser(
-        description="🦇 ReconFusion M7 – Modular Recon & Vulnerability Framework",
+    ap = argparse.ArgumentParser(
+        description="\U0001f987 ReconFusion M7 \u2013 Modular Recon & Vulnerability Framework",
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Examples:
-  python reconfusion.py -d example.com -o my-project
-  python reconfusion.py -d 192.168.1.1 -o pentest-2024
-
-⚠️  For authorized security testing ONLY.
-    Produced by MilkyWay Intelligence | M7 BATMAN Edition
-        """
+        epilog=(
+            "Examples:\n"
+            "  python3 reconfusion.py -d example.com -o pentest-2024\n"
+            "  python3 reconfusion.py -d 192.168.1.1 -o internal-scan\n\n"
+            "\u26a0  For AUTHORIZED security testing ONLY.\n"
+            "  Produced by MilkyWay Intelligence | M7 BATMAN Edition"
+        ),
     )
-    parser.add_argument("-d", "--domain", required=True, help="Target domain or IP")
-    parser.add_argument("-o", "--output", default="reconfusion-output", help="Output directory name")
-    parser.add_argument("--skip-install", action="store_true", help="Skip auto tool installation")
-    args = parser.parse_args()
+    ap.add_argument("-d", "--domain", required=True,
+                    help="Target domain or IP  (e.g. example.com)")
+    ap.add_argument("-o", "--output", default="reconfusion-output",
+                    help="Output folder name  (default: reconfusion-output)")
+    args = ap.parse_args()
+    asyncio.run(ReconFusion(args.domain, args.output).run())
 
-    rf = ReconFusion(target=args.domain, output_dir=args.output)
-    asyncio.run(rf.run())
+
+if __name__ == "__main__":
+    main()
 
 
 if __name__ == "__main__":
