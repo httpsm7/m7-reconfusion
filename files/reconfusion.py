@@ -115,31 +115,40 @@ WORDLISTS = [
 
 def find_tool(name: str) -> str:
     """
-    Find tool binary safely - no PermissionError.
-    Checks home go/bin first, then system paths, then which.
+    Find tool binary using ONLY 'which' — zero PermissionError risk.
+    which checks PATH properly for the current user.
+    Also checks ~/go/bin explicitly since Go tools may not be in PATH.
     """
-    candidates = [
-        Path.home() / "go" / "bin" / name,
-        Path("/usr/local/bin") / name,
-        Path("/usr/bin") / name,
-        Path("/snap/bin") / name,
-    ]
-    for c in candidates:
-        try:
-            if c.exists() and os.access(str(c), os.X_OK):
-                return str(c)
-        except (PermissionError, OSError):
-            continue
-    r = subprocess.run(["which", name], capture_output=True, text=True)
-    return r.stdout.strip() if r.returncode == 0 else name
+    # First: check ~/go/bin directly via string stat (safest)
+    go_path = os.path.join(os.path.expanduser("~"), "go", "bin", name)
+    try:
+        if os.path.isfile(go_path) and os.access(go_path, os.X_OK):
+            return go_path
+    except Exception:
+        pass
+
+    # Second: use `which` — delegates to shell PATH, no permission issues
+    r = subprocess.run(
+        ["which", name],
+        capture_output=True, text=True,
+        timeout=5,
+    )
+    if r.returncode == 0 and r.stdout.strip():
+        return r.stdout.strip()
+
+    return name  # fallback: hope it is in PATH at runtime
 
 
 def tool_exists(name: str) -> bool:
+    """Check if tool exists using which only — no Path.exists() calls."""
     try:
-        path = find_tool(name)
-        if path != name:
+        # Check ~/go/bin first
+        go_path = os.path.join(os.path.expanduser("~"), "go", "bin", name)
+        if os.path.isfile(go_path) and os.access(go_path, os.X_OK):
             return True
-        return subprocess.run(["which", name], capture_output=True).returncode == 0
+        # Then check PATH via which
+        r = subprocess.run(["which", name], capture_output=True, text=True, timeout=5)
+        return r.returncode == 0
     except Exception:
         return False
 
