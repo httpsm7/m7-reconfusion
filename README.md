@@ -1,69 +1,127 @@
- 🦇 ReconFusion M7
+# 🦇 ReconFusion M7
+
 ### Modular Recon & Vulnerability Automation Framework
+
 **Produced by MilkyWay Intelligence | M7 BATMAN Edition**
 
+![Python](https://img.shields.io/badge/python-3.8+-blue)
+![License](https://img.shields.io/badge/license-MIT-green)
+![Security](https://img.shields.io/badge/security-reconnaissance-red)
+![Platform](https://img.shields.io/badge/platform-linux-lightgrey)
+
+ReconFusion M7 is an **automated reconnaissance and vulnerability scanning framework** designed for **bug bounty hunters, penetration testers, and security researchers**.
+
+It combines multiple powerful open-source tools into a **single modular pipeline** to automate:
+
+* Subdomain discovery
+* Live host detection
+* Port scanning
+* Web crawling
+* Vulnerability scanning
+* Security reporting
+
+All results are consolidated into a **professional HTML security report**.
+
+---
+
+# ⚠️ Legal Disclaimer
+
+This tool is intended **ONLY for authorized security testing**.
+
+Unauthorized scanning of systems without permission may be illegal.
+
+The developers assume **no responsibility for misuse**.
+
+Always ensure you have **written authorization** before testing any target.
+
+---
+
+# 🎯 Key Features
+
+| Feature                   | Description                              |
+| ------------------------- | ---------------------------------------- |
+| 🔍 Subdomain Enumeration  | Uses multiple tools for maximum coverage |
+| 🌐 Live Host Detection    | Identifies active hosts and technologies |
+| 🚪 Port Scanning          | Detects open ports and exposed services  |
+| 🕷️ Web Crawling          | Discovers endpoints using Katana         |
+| 💉 Vulnerability Scanning | XSS detection via Dalfox                 |
+| 🛡️ Security Scanning     | CVE detection using Nuclei               |
+| 📊 Automated Reporting    | Generates HTML vulnerability report      |
+| 🧩 Modular Pipeline       | Each phase can be extended               |
+
+---
+
+# 🔧 Tools Integrated
+
+ReconFusion integrates industry-standard recon tools:
+
+* **assetfinder**
+* **subfinder**
+* **amass**
+* **httpx**
+* **naabu**
+* **nmap**
+* **katana**
+* **dalfox**
+* **nuclei**
+
+These tools work together to build a **complete attack surface map**.
+
+---
+
+# ⚡ Recon Workflow
+
 ```
-██████╗ ███████╗ ██████╗ ██████╗ ███╗   ██╗███████╗██╗   ██╗███████╗██╗ ██████╗ ███╗   ██╗
-██╔══██╗██╔════╝██╔════╝██╔═══██╗████╗  ██║██╔════╝██║   ██║██╔════╝██║██╔═══██╗████╗  ██║
-██████╔╝█████╗  ██║     ██║   ██║██╔██╗ ██║█████╗  ██║   ██║███████╗██║██║   ██║██╔██╗ ██║
-██╔══██╗██╔══╝  ██║     ██║   ██║██║╚██╗██║██╔══╝  ██║   ██║╚════██║██║██║   ██║██║╚██╗██║
-██║  ██║███████╗╚██████╗╚██████╔╝██║ ╚████║██║     ╚██████╔╝███████║██║╚██████╔╝██║ ╚████║
-╚═╝  ╚═╝╚══════╝ ╚═════╝ ╚═════╝ ╚═╝  ╚═══╝╚═╝      ╚═════╝ ╚══════╝╚═╝ ╚═════╝ ╚═╝  ╚═══╝
+Scope Validation
+        ↓
+Subdomain Enumeration
+        ↓
+Live Host Detection
+        ↓
+Port Scanning
+        ↓
+Endpoint Crawling
+        ↓
+Vulnerability Scanning
+        ↓
+Automated Security Report
 ```
 
 ---
 
-## ⚠️ LEGAL DISCLAIMER
+# 🚀 Quick Start
 
-> **This tool is intended for AUTHORIZED security testing ONLY.**  
-> Unauthorized use against systems you do not own or have explicit written permission to test is **ILLEGAL** and may result in criminal prosecution.  
-> The developers and contributors assume NO liability for misuse.  
-> Always obtain proper written authorization before scanning any target.
+### 1️⃣ Install dependencies
 
----
-
-## 🎯 Features
-
-| Phase | Description | Tools |
-|-------|-------------|-------|
-| 0 | Scope Validation & Auth Check | Built-in |
-| 1 | Subdomain Enumeration | assetfinder, subfinder, amass |
-| 2 | Live Host Detection | httpx |
-| 3 | Port Scanning | naabu / nmap |
-| 4 | Advanced Scanning | katana, dalfox, nuclei |
-| 5 | Analysis Engine | Built-in parser |
-| 6 | HTML Report Generator | Jinja2 + Bootstrap |
-
----
-
-## 🚀 Quick Start
-
-### 1. Install (Auto)
-```bash
+```
 sudo bash setup.sh
 ```
 
-### 2. Run
-```bash
+### 2️⃣ Run scan
+
+```
 python3 reconfusion.py -d example.com -o project-folder
 ```
 
-### 3. View Report
-```bash
+### 3️⃣ Open report
+
+```
 firefox project-folder/reports/final_report.html
 ```
 
 ---
 
-## 📦 Manual Installation
+# 📦 Manual Installation
 
-### Python deps
-```bash
+### Python Dependencies
+
+```
 pip3 install -r requirements.txt --break-system-packages
 ```
 
-### Go tools (Kali Linux)
-```bash
+### Install Go Tools
+
+```
 go install github.com/tomnomnom/assetfinder@latest
 go install github.com/projectdiscovery/subfinder/v2/cmd/subfinder@latest
 go install github.com/projectdiscovery/httpx/cmd/httpx@latest
@@ -73,34 +131,40 @@ go install github.com/hahwul/dalfox/v2@latest
 go install github.com/projectdiscovery/nuclei/v2/cmd/nuclei@latest
 ```
 
-### System tools
-```bash
+### System Packages
+
+```
 sudo apt install nmap amass -y
 ```
 
 ---
 
-## 📂 Output Structure
+# 📂 Project Output Structure
 
 ```
 project-folder/
+│
 ├── raw/
 │   ├── assetfinder.txt
 │   ├── subfinder.txt
 │   └── amass.txt
+│
 ├── processed/
 │   ├── all_subdomains.txt
 │   ├── live_hosts.txt
 │   ├── live_hosts.json
 │   └── analysis.json
+│
 ├── scans/
 │   ├── open_ports.txt
 │   ├── open_ports.json
 │   ├── katana_urls.txt
 │   ├── dalfox_results.txt
 │   └── nuclei_results.txt
+│
 ├── reports/
-│   └── final_report.html  ← 📊 Main report
+│   └── final_report.html
+│
 └── logs/
     ├── reconfusion.log
     └── scope.json
@@ -108,50 +172,89 @@ project-folder/
 
 ---
 
-## 🔧 CLI Options
+# 🛠 CLI Options
 
 ```
 usage: reconfusion.py [-h] -d DOMAIN [-o OUTPUT] [--skip-install]
 
 options:
-  -h, --help       show this help message and exit
+  -h, --help       Show help message
   -d, --domain     Target domain or IP (required)
-  -o, --output     Output directory name (default: reconfusion-output)
-  --skip-install   Skip auto tool installation check
+  -o, --output     Output directory
+  --skip-install   Skip dependency check
 ```
 
 ---
 
-## 🛡️ Report Features
+# 📊 Security Report
 
-- Executive Summary
-- Scope & Authorization Details  
-- Recon Results (Subdomains)
-- Live Hosts Table
-- Open Ports Table
-- Vulnerability Breakdown with color-coded severity
-- Detailed Findings (collapsible)
-- Tool Versions & Timestamps
+ReconFusion generates a **professional vulnerability report** including:
 
-### Severity Colors
-| Severity | Color |
-|----------|-------|
-| 🔴 Critical | Red |
-| 🟠 High | Orange |
-| 🟡 Medium | Yellow |
-| 🔵 Low | Blue |
-| ⚪ Info | Gray |
+* Executive Summary
+* Scope Information
+* Discovered Subdomains
+* Live Hosts
+* Open Ports
+* Vulnerability Findings
+* Severity Classification
+* Tool Versions
+* Scan Timeline
 
----
+### Severity Levels
 
-## 📋 Requirements
-
-- **OS**: Kali Linux (recommended) / Any Debian-based Linux
-- **Python**: 3.8+
-- **Go**: 1.18+ (for Go-based tools)
-- **Root**: Required for naabu/nmap
+| Level    | Color     |
+| -------- | --------- |
+| Critical | 🔴 Red    |
+| High     | 🟠 Orange |
+| Medium   | 🟡 Yellow |
+| Low      | 🔵 Blue   |
+| Info     | ⚪ Gray    |
 
 ---
 
-*🦇 ReconFusion M7 – Produced by MilkyWay Intelligence*  
-*For authorized security testing ONLY.*
+# 📋 Requirements
+
+| Requirement | Version                  |
+| ----------- | ------------------------ |
+| Python      | 3.8+                     |
+| Go          | 1.18+                    |
+| OS          | Linux (Kali Recommended) |
+
+Root privileges may be required for **naabu and nmap**.
+
+---
+
+# 🤝 Contributing
+
+Pull requests are welcome.
+
+If you find bugs or have feature suggestions, open an issue.
+
+---
+
+# ⭐ Support
+
+If you find this project useful:
+
+⭐ **Star the repository**
+🐛 **Report bugs**
+🔧 **Submit improvements**
+
+---
+
+# 👨‍💻 Author
+
+MilkyWay Intelligence
+
+---
+
+# 🛡️ Security Notice
+
+This project is designed for:
+
+* Bug bounty hunters
+* Security researchers
+* Penetration testers
+
+Use responsibly and **only within authorized scope**.
+
